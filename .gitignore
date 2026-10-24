@@ -1,0 +1,48 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Node dependencies & web builds
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# Rust & Tauri build targets
+target/
+src-tauri/target/
+src-tauri/gen/schemas/
+.cargo/
+src-tauri/.cargo/
+
+# Compiled Binaries (Shipped via GitHub Releases)
+*.exe
+MiniCord.exe
+EBWebView/
+
+# Secrets, Session Vaults & Tokens (STRICTLY FORBIDDEN FROM GIT)
+*.token
+.minicord_token
+*.vault
+session.vault
+.env
+.env.*
+*.pem
+*.key
+*.pfx
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
