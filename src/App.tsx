@@ -1,10 +1,13 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { TitleBar } from "./components/TitleBar";
 import { GuildRail } from "./components/GuildRail";
 import { ChannelSidebar } from "./components/ChannelSidebar";
 import { ChatArea } from "./components/ChatArea";
+import { MemberList } from "./components/MemberList";
+import { UserProfileModal } from "./components/UserProfileModal";
+import { FriendsTab } from "./components/FriendsTab";
 import { LoginModal } from "./components/LoginModal";
 import { SettingsModal } from "./components/SettingsModal";
 import {
@@ -16,11 +19,15 @@ import {
   DiscordMessage,
   AppSettings,
   UserPresence,
+  DiscordMember,
+  DiscordRole,
+  TypingEvent,
 } from "./types";
 import "./App.css";
 
 // Check if running in Tauri environment
-const isTauri = typeof window !== "undefined" && Boolean((window as any).__TAURI_INTERNALS__);
+const isTauri =
+  typeof window !== "undefined" && Boolean((window as any).__TAURI_INTERNALS__);
 
 const DEFAULT_SETTINGS: AppSettings = {
   fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
@@ -59,6 +66,18 @@ export default function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [presences, setPresences] = useState<Record<string, UserPresence>>({});
 
+  // New UI states: Member list, Friends tab, Profile Modal
+  const [isMemberListOpen, setIsMemberListOpen] = useState(true);
+  const [isFriendsTabActive, setIsFriendsTabActive] = useState(false);
+  const [selectedUserForProfile, setSelectedUserForProfile] = useState<DiscordUser | null>(null);
+  const [selectedMemberForProfile, setSelectedMemberForProfile] = useState<DiscordMember | null>(null);
+  const [guildRoles, setGuildRoles] = useState<DiscordRole[]>([]);
+
+  // Real-time typing indicators
+  const [typingMap, setTypingMap] = useState<
+    Record<string, Record<string, { username: string; expiresAt: number }>>
+  >({});
+
   const [settings, setSettings] = useState<AppSettings>(() => {
     try {
       const saved = localStorage.getItem("minicord_settings");
@@ -71,6 +90,8 @@ export default function App() {
 
   const activeChannelRef = useRef<DiscordChannel | null>(null);
   activeChannelRef.current = activeChannel;
+  const currentUserRef = useRef<DiscordUser | null>(null);
+  currentUserRef.current = currentUser;
   const settingsRef = useRef<AppSettings>(settings);
   settingsRef.current = settings;
 
@@ -85,7 +106,11 @@ export default function App() {
   // Apply theme palette to root CSS variables
   const applyTheme = (theme: ThemePalette) => {
     setPalette(theme);
-    if (!settingsRef.current.wallpaperSync && settingsRef.current.customAccent && settingsRef.current.customAccent !== "auto") {
+    if (
+      !settingsRef.current.wallpaperSync &&
+      settingsRef.current.customAccent &&
+      settingsRef.current.customAccent !== "auto"
+    ) {
       return;
     }
     const root = document.documentElement;
@@ -98,7 +123,11 @@ export default function App() {
   // Font and Accent styling effect
   useEffect(() => {
     document.body.style.fontFamily = settings.fontFamily;
-    if (!settings.wallpaperSync && settings.customAccent && settings.customAccent !== "auto") {
+    if (
+      !settings.wallpaperSync &&
+      settings.customAccent &&
+      settings.customAccent !== "auto"
+    ) {
       applyAccentColor(settings.customAccent);
     } else if (settings.wallpaperSync && palette) {
       applyTheme(palette);
@@ -130,8 +159,11 @@ export default function App() {
     setActiveChannel(null);
     setMessages([]);
     setIsSettingsOpen(false);
+    setSelectedUserForProfile(null);
+    setSelectedMemberForProfile(null);
   };
 
+  // Gateway and Platform Event Subscriptions
   useEffect(() => {
     if (!isTauri) {
       applyTheme({
@@ -154,27 +186,33 @@ export default function App() {
       .catch((e) => console.error("Theme fetch error:", e));
 
     // 2. Listen to live Wallpaper Engine theme changes from Rust
-    const unlistenPromise = listen<ThemePalette>("wallpaper-theme-update", (event) => {
+    const unlistenTheme = listen<ThemePalette>("wallpaper-theme-update", (event) => {
       applyTheme(event.payload);
     });
 
     // 3. Listen to Gateway Presences Sync (initial bulk presences)
-    const unlistenPresences = listen<UserPresence[]>("gateway-presences-sync", (event) => {
-      const map: Record<string, UserPresence> = {};
-      for (const p of event.payload) {
-        map[p.user_id] = p;
+    const unlistenPresences = listen<UserPresence[]>(
+      "gateway-presences-sync",
+      (event) => {
+        const map: Record<string, UserPresence> = {};
+        for (const p of event.payload) {
+          map[p.user_id] = p;
+        }
+        setPresences((prev) => ({ ...prev, ...map }));
       }
-      setPresences((prev) => ({ ...prev, ...map }));
-    });
+    );
 
     // 4. Listen to Live Gateway Presence Updates
-    const unlistenPresenceUpdate = listen<UserPresence>("gateway-presence-update", (event) => {
-      const p = event.payload;
-      setPresences((prev) => ({
-        ...prev,
-        [p.user_id]: p,
-      }));
-    });
+    const unlistenPresenceUpdate = listen<UserPresence>(
+      "gateway-presence-update",
+      (event) => {
+        const p = event.payload;
+        setPresences((prev) => ({
+          ...prev,
+          [p.user_id]: p,
+        }));
+      }
+    );
 
     // 5. Listen to Real-time Gateway Messages
     const unlistenMsgCreate = listen<any>("gateway-message-create", (event) => {
@@ -200,13 +238,162 @@ export default function App() {
       });
     });
 
+    // 6. Listen to Real-time Typing Indicators from Gateway
+    const unlistenTyping = listen<TypingEvent>("gateway-typing-start", (event) => {
+      const { channel_id, user_id, member } = event.payload;
+      const me = currentUserRef.current;
+      if (me && user_id === me.id) return;
+
+      const username =
+        member?.nick ||
+        member?.user?.global_name ||
+        member?.user?.username ||
+        "Someone";
+
+      setTypingMap((prev) => {
+        const channelTyping = { ...(prev[channel_id] || {}) };
+        channelTyping[user_id] = {
+          username,
+          expiresAt: Date.now() + 7500,
+        };
+        return { ...prev, [channel_id]: channelTyping };
+      });
+    });
+
+    // 7. Listen to Real-time Reactions Add
+    const unlistenReactionAdd = listen<any>("gateway-reaction-add", (event) => {
+      const payload = event.payload;
+      const ch = activeChannelRef.current;
+      if (ch && payload.channel_id === ch.id) {
+        setMessages((prev) =>
+          prev.map((m) => {
+            if (m.id !== payload.message_id) return m;
+            const reactions = [...(m.reactions || [])];
+            const pEmoji = payload.emoji;
+            const isCustom = Boolean(pEmoji.id);
+            const key = isCustom ? `${pEmoji.name}:${pEmoji.id}` : pEmoji.name;
+
+            const existingIdx = reactions.findIndex((r) => {
+              const rKey = r.emoji.id
+                ? `${r.emoji.name}:${r.emoji.id}`
+                : r.emoji.name;
+              return rKey === key;
+            });
+
+            const me = currentUserRef.current;
+            const isMe = me ? payload.user_id === me.id : false;
+
+            if (existingIdx !== -1) {
+              reactions[existingIdx] = {
+                ...reactions[existingIdx],
+                count: reactions[existingIdx].count + 1,
+                me: isMe ? true : reactions[existingIdx].me,
+              };
+            } else {
+              reactions.push({
+                count: 1,
+                me: isMe,
+                emoji: {
+                  id: pEmoji.id || null,
+                  name: pEmoji.name,
+                },
+              });
+            }
+            return { ...m, reactions };
+          })
+        );
+      }
+    });
+
+    // 8. Listen to Real-time Reactions Remove
+    const unlistenReactionRemove = listen<any>("gateway-reaction-remove", (event) => {
+      const payload = event.payload;
+      const ch = activeChannelRef.current;
+      if (ch && payload.channel_id === ch.id) {
+        setMessages((prev) =>
+          prev.map((m) => {
+            if (m.id !== payload.message_id) return m;
+            const reactions = [...(m.reactions || [])];
+            const pEmoji = payload.emoji;
+            const isCustom = Boolean(pEmoji.id);
+            const key = isCustom ? `${pEmoji.name}:${pEmoji.id}` : pEmoji.name;
+
+            const existingIdx = reactions.findIndex((r) => {
+              const rKey = r.emoji.id
+                ? `${r.emoji.name}:${r.emoji.id}`
+                : r.emoji.name;
+              return rKey === key;
+            });
+
+            const me = currentUserRef.current;
+            const isMe = me ? payload.user_id === me.id : false;
+
+            if (existingIdx !== -1) {
+              const cur = reactions[existingIdx];
+              if (cur.count <= 1) {
+                reactions.splice(existingIdx, 1);
+              } else {
+                reactions[existingIdx] = {
+                  ...cur,
+                  count: cur.count - 1,
+                  me: isMe ? false : cur.me,
+                };
+              }
+            }
+            return { ...m, reactions };
+          })
+        );
+      }
+    });
+
     return () => {
-      unlistenPromise.then((unlisten) => unlisten());
-      unlistenPresences.then((unlisten) => unlisten());
-      unlistenPresenceUpdate.then((unlisten) => unlisten());
-      unlistenMsgCreate.then((unlisten) => unlisten());
+      unlistenTheme.then((u) => u());
+      unlistenPresences.then((u) => u());
+      unlistenPresenceUpdate.then((u) => u());
+      unlistenMsgCreate.then((u) => u());
+      unlistenTyping.then((u) => u());
+      unlistenReactionAdd.then((u) => u());
+      unlistenReactionRemove.then((u) => u());
     };
   }, []);
+
+  // Periodic typing cleanup (purge expired typing entries)
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const now = Date.now();
+      setTypingMap((prev) => {
+        let changed = false;
+        const next: typeof prev = {};
+        for (const [chId, users] of Object.entries(prev)) {
+          const validUsers: Record<
+            string,
+            { username: string; expiresAt: number }
+          > = {};
+          for (const [uId, data] of Object.entries(users)) {
+            if (data.expiresAt > now) {
+              validUsers[uId] = data;
+            } else {
+              changed = true;
+            }
+          }
+          if (Object.keys(validUsers).length > 0) {
+            next[chId] = validUsers;
+          }
+        }
+        return changed ? next : prev;
+      });
+    }, 1500);
+
+    return () => clearInterval(timer);
+  }, []);
+
+  // Active channel typing users list
+  const activeTypingUsernames = useMemo(() => {
+    if (!activeChannel) return [];
+    const users = typingMap[activeChannel.id];
+    if (!users) return [];
+    return Object.values(users).map((u) => u.username);
+  }, [typingMap, activeChannel?.id]);
 
   // Fetch and sort DMs by recent message
   const loadDMs = async () => {
@@ -221,7 +408,7 @@ export default function App() {
       setDms(sorted);
 
       // Auto-select the most recent active conversation if no channel is active
-      if (sorted.length > 0 && !activeChannelRef.current) {
+      if (sorted.length > 0 && !activeChannelRef.current && !isFriendsTabActive) {
         const first = sorted[0];
         const recipient = first.recipients?.[0];
         const displayName =
@@ -252,7 +439,9 @@ export default function App() {
       await loadDMs();
 
       try {
-        const initialPresences = await invoke<UserPresence[]>("get_user_presences");
+        const initialPresences = await invoke<UserPresence[]>(
+          "get_user_presences"
+        );
         const map: Record<string, UserPresence> = {};
         for (const p of initialPresences) {
           map[p.user_id] = p;
@@ -270,13 +459,18 @@ export default function App() {
     setChannels([]);
     setActiveChannel(null);
     setMessages([]);
+    setIsFriendsTabActive(false);
 
     if (guild && isTauri) {
       try {
-        const guildChannels = await invoke<DiscordChannel[]>("get_channels", {
-          guildId: guild.id,
-        });
+        const [guildChannels, roles] = await Promise.all([
+          invoke<DiscordChannel[]>("get_channels", { guildId: guild.id }),
+          invoke<DiscordRole[]>("get_guild_roles", { guildId: guild.id }).catch(
+            () => []
+          ),
+        ]);
         setChannels(guildChannels);
+        setGuildRoles(roles);
 
         // Find the first text/announcement channel (type 0 or 5) by lowest position
         const textChannels = guildChannels
@@ -290,6 +484,7 @@ export default function App() {
         console.error("Failed to load guild channels:", err);
       }
     } else if (!guild && isTauri) {
+      setGuildRoles([]);
       await loadDMs();
     }
   };
@@ -297,6 +492,7 @@ export default function App() {
   // Select channel and load messages
   const handleSelectChannel = async (channel: DiscordChannel) => {
     setActiveChannel(channel);
+    setIsFriendsTabActive(false);
     setIsLoadingMessages(true);
     if (!isTauri) {
       setIsLoadingMessages(false);
@@ -313,6 +509,116 @@ export default function App() {
       console.error("Failed to load messages:", err);
     } finally {
       setIsLoadingMessages(false);
+    }
+  };
+
+  // Open or create DM conversation with a user
+  const handleOpenDM = async (userId: string) => {
+    if (!isTauri) return;
+    try {
+      const dmChannel = await invoke<DiscordDMChannel>("create_dm", {
+        recipientId: userId,
+      });
+
+      setDms((prev) => {
+        if (prev.some((d) => d.id === dmChannel.id)) return prev;
+        return [dmChannel, ...prev];
+      });
+
+      const recipient = dmChannel.recipients?.[0];
+      const displayName =
+        dmChannel.type === 3
+          ? dmChannel.name || "Group Chat"
+          : recipient?.global_name || recipient?.username || "Direct Message";
+
+      setActiveGuild(null);
+      setIsFriendsTabActive(false);
+      setSelectedUserForProfile(null);
+      setSelectedMemberForProfile(null);
+
+      handleSelectChannel({
+        id: dmChannel.id,
+        name: displayName,
+        type: dmChannel.type,
+        recipient: recipient || null,
+      });
+    } catch (err) {
+      console.error("Failed to open DM:", err);
+    }
+  };
+
+  // Toggle reaction (add or remove)
+  const handleToggleReaction = async (
+    messageId: string,
+    emoji: string,
+    isMe: boolean
+  ) => {
+    if (!activeChannel || !isTauri) return;
+
+    // Optimistically update reactions in local messages state
+    setMessages((prevMsgs) =>
+      prevMsgs.map((m) => {
+        if (m.id !== messageId) return m;
+        const reactions = [...(m.reactions || [])];
+        const existingIdx = reactions.findIndex((r) => {
+          const key = r.emoji.id
+            ? `${r.emoji.name}:${r.emoji.id}`
+            : r.emoji.name;
+          return key === emoji;
+        });
+
+        if (isMe) {
+          if (existingIdx !== -1) {
+            const cur = reactions[existingIdx];
+            if (cur.count <= 1) {
+              reactions.splice(existingIdx, 1);
+            } else {
+              reactions[existingIdx] = {
+                ...cur,
+                count: cur.count - 1,
+                me: false,
+              };
+            }
+          }
+        } else {
+          if (existingIdx !== -1) {
+            reactions[existingIdx] = {
+              ...reactions[existingIdx],
+              count: reactions[existingIdx].count + 1,
+              me: true,
+            };
+          } else {
+            const parts = emoji.split(":");
+            reactions.push({
+              count: 1,
+              me: true,
+              emoji:
+                parts.length > 1
+                  ? { name: parts[0], id: parts[1] }
+                  : { name: emoji },
+            });
+          }
+        }
+        return { ...m, reactions };
+      })
+    );
+
+    try {
+      if (isMe) {
+        await invoke("remove_reaction", {
+          channelId: activeChannel.id,
+          messageId,
+          emoji,
+        });
+      } else {
+        await invoke("add_reaction", {
+          channelId: activeChannel.id,
+          messageId,
+          emoji,
+        });
+      }
+    } catch (err) {
+      console.error("Failed to toggle reaction:", err);
     }
   };
 
@@ -373,7 +679,6 @@ export default function App() {
                 prev.length === 0 ||
                 reversed[reversed.length - 1].id !== prev[prev.length - 1]?.id
               ) {
-                // If new message in DM, bump DM list
                 if (ch.type === 1 || ch.type === 3) {
                   const lastId = reversed[reversed.length - 1].id;
                   setDms((prevDms) => {
@@ -407,8 +712,12 @@ export default function App() {
       <TitleBar
         palette={palette}
         activeGuildName={activeGuild?.name}
-        activeChannelName={activeChannel?.name}
-        activeChannelType={activeChannel?.type}
+        activeChannelName={
+          isFriendsTabActive
+            ? "Friends"
+            : activeChannel?.name || "Direct Messages"
+        }
+        activeChannelType={isFriendsTabActive ? undefined : activeChannel?.type}
       />
 
       {/* Main Content Area */}
@@ -430,18 +739,70 @@ export default function App() {
           onSelectChannel={handleSelectChannel}
           onOpenSettings={() => setIsSettingsOpen(true)}
           presences={presences}
+          isFriendsTabActive={isFriendsTabActive}
+          onSelectFriendsTab={() => {
+            setIsFriendsTabActive(true);
+            setActiveChannel(null);
+          }}
         />
 
-        {/* Main Chat Feed */}
-        <ChatArea
-          activeChannel={activeChannel}
-          messages={messages}
-          onSendMessage={handleSendMessage}
-          isLoading={isLoadingMessages}
-          settings={settings}
-          presences={presences}
-        />
+        {/* Center Main View: Friends Dashboard OR Chat Area */}
+        {!activeGuild && isFriendsTabActive ? (
+          <FriendsTab
+            presences={presences}
+            onOpenDM={handleOpenDM}
+            onSelectUser={(user) => {
+              setSelectedUserForProfile(user);
+              setSelectedMemberForProfile(null);
+            }}
+          />
+        ) : (
+          <ChatArea
+            activeChannel={activeChannel}
+            messages={messages}
+            onSendMessage={handleSendMessage}
+            isLoading={isLoadingMessages}
+            settings={settings}
+            presences={presences}
+            onSelectUser={(user) => {
+              setSelectedUserForProfile(user);
+              setSelectedMemberForProfile(null);
+            }}
+            isMemberListOpen={isMemberListOpen}
+            onToggleMemberList={() => setIsMemberListOpen(!isMemberListOpen)}
+            typingUsers={activeTypingUsernames}
+            onToggleReaction={handleToggleReaction}
+          />
+        )}
+
+        {/* Right Server Member List Sidebar */}
+        {activeGuild && activeChannel && isMemberListOpen && (
+          <MemberList
+            activeGuild={activeGuild}
+            presences={presences}
+            onSelectUser={(user, member) => {
+              setSelectedUserForProfile(user);
+              setSelectedMemberForProfile(member || null);
+            }}
+            onClose={() => setIsMemberListOpen(false)}
+          />
+        )}
       </div>
+
+      {/* User Profile Popout Modal */}
+      {selectedUserForProfile && (
+        <UserProfileModal
+          user={selectedUserForProfile}
+          member={selectedMemberForProfile}
+          roles={guildRoles}
+          presence={presences[selectedUserForProfile.id]}
+          onClose={() => {
+            setSelectedUserForProfile(null);
+            setSelectedMemberForProfile(null);
+          }}
+          onOpenDM={handleOpenDM}
+        />
+      )}
 
       {/* Settings Modal */}
       {isSettingsOpen && (

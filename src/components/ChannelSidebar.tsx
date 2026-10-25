@@ -33,6 +33,8 @@ interface ChannelSidebarProps {
   onSelectChannel: (channel: DiscordChannel) => void;
   onOpenSettings?: () => void;
   presences?: Record<string, UserPresence>;
+  isFriendsTabActive?: boolean;
+  onSelectFriendsTab?: () => void;
 }
 
 // Compare Discord Snowflakes descending (newest timestamp first)
@@ -60,6 +62,8 @@ export const ChannelSidebar: React.FC<ChannelSidebarProps> = ({
   onSelectChannel,
   onOpenSettings,
   presences = {},
+  isFriendsTabActive = false,
+  onSelectFriendsTab,
 }) => {
   const [isMuted, setIsMuted] = useState(false);
   const [isDeafened, setIsDeafened] = useState(false);
@@ -256,8 +260,27 @@ export const ChannelSidebar: React.FC<ChannelSidebarProps> = ({
         ) : (
           /* ===================== DIRECT MESSAGES VIEW ===================== */
           <div>
+            {/* Friends Navigation Item */}
+            <button
+              onClick={() => onSelectFriendsTab?.()}
+              className={`w-full px-2.5 py-2 mb-2 rounded-xl flex items-center gap-2.5 transition-all text-left cursor-pointer group ${
+                isFriendsTabActive
+                  ? "bg-[var(--accent-dim)] text-white border-l-2 border-[var(--accent)] font-medium"
+                  : "text-slate-300 hover:bg-white/5 hover:text-white"
+              }`}
+            >
+              <div className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center shrink-0">
+                <Users
+                  className={`w-4 h-4 ${
+                    isFriendsTabActive ? "text-[var(--accent)]" : "text-slate-300"
+                  }`}
+                />
+              </div>
+              <span className="text-sm font-medium">Friends</span>
+            </button>
+
             <div className="px-2 mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-400/80 flex items-center justify-between">
-              <span>Recent Chats</span>
+              <span>Direct Messages</span>
               <span className="text-[10px] text-white/30 font-mono">{sortedDms.length}</span>
             </div>
 

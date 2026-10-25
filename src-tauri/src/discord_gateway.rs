@@ -228,6 +228,14 @@ pub fn spawn_gateway_session(app: AppHandle, token: String, state: Arc<GatewaySt
                                                     }
                                                 } else if event_name == "MESSAGE_CREATE" {
                                                     let _ = app.emit("gateway-message-create", &v["d"]);
+                                                } else if event_name == "TYPING_START" {
+                                                    let _ = app.emit("gateway-typing-start", &v["d"]);
+                                                } else if event_name == "MESSAGE_REACTION_ADD" {
+                                                    let _ = app.emit("gateway-reaction-add", &v["d"]);
+                                                } else if event_name == "MESSAGE_REACTION_REMOVE" {
+                                                    let _ = app.emit("gateway-reaction-remove", &v["d"]);
+                                                } else if event_name == "RELATIONSHIP_ADD" || event_name == "RELATIONSHIP_REMOVE" {
+                                                    let _ = app.emit("gateway-relationship-update", &v["d"]);
                                                 }
                                             } else if op == 1 {
                                                 // Gateway requested immediate heartbeat

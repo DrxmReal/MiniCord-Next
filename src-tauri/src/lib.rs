@@ -113,6 +113,63 @@ async fn stop_ring_call(channel_id: String, state: State<'_, DiscordState>) -> R
 }
 
 #[tauri::command]
+async fn get_guild_members(
+    guild_id: String,
+    limit: Option<u32>,
+    state: State<'_, DiscordState>,
+) -> Result<Vec<serde_json::Value>, String> {
+    state.get_guild_members(&guild_id, limit).await
+}
+
+#[tauri::command]
+async fn get_guild_roles(
+    guild_id: String,
+    state: State<'_, DiscordState>,
+) -> Result<Vec<serde_json::Value>, String> {
+    state.get_guild_roles(&guild_id).await
+}
+
+#[tauri::command]
+async fn get_relationships(state: State<'_, DiscordState>) -> Result<Vec<serde_json::Value>, String> {
+    state.get_relationships().await
+}
+
+#[tauri::command]
+async fn get_user_profile(user_id: String, state: State<'_, DiscordState>) -> Result<serde_json::Value, String> {
+    state.get_user_profile(&user_id).await
+}
+
+#[tauri::command]
+async fn trigger_typing(channel_id: String, state: State<'_, DiscordState>) -> Result<bool, String> {
+    state.trigger_typing(&channel_id).await
+}
+
+#[tauri::command]
+async fn add_reaction(
+    channel_id: String,
+    message_id: String,
+    emoji: String,
+    state: State<'_, DiscordState>,
+) -> Result<bool, String> {
+    state.add_reaction(&channel_id, &message_id, &emoji).await
+}
+
+#[tauri::command]
+async fn remove_reaction(
+    channel_id: String,
+    message_id: String,
+    emoji: String,
+    state: State<'_, DiscordState>,
+) -> Result<bool, String> {
+    state.remove_reaction(&channel_id, &message_id, &emoji).await
+}
+
+#[tauri::command]
+async fn create_dm(recipient_id: String, state: State<'_, DiscordState>) -> Result<serde_json::Value, String> {
+    state.create_dm(&recipient_id).await
+}
+
+#[tauri::command]
 async fn logout(
     state: State<'_, DiscordState>,
     gw_state: State<'_, Arc<GatewayState>>,
@@ -159,7 +216,15 @@ pub fn run() {
             fetch_cdn_proxy,
             ring_call,
             stop_ring_call,
-            get_user_presences
+            get_user_presences,
+            get_guild_members,
+            get_guild_roles,
+            get_relationships,
+            get_user_profile,
+            trigger_typing,
+            add_reaction,
+            remove_reaction,
+            create_dm
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

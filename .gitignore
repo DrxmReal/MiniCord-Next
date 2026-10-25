@@ -38,6 +38,7 @@ session.vault
 *.pfx
 
 # Editor directories and files
+.git_old/
 .vscode/*
 !.vscode/extensions.json
 .idea/

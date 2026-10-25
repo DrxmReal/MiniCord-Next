@@ -7,6 +7,7 @@ import {
   X,
   Image as ImageIcon,
   Smile,
+  SmilePlus,
   Phone,
   PhoneOff,
   Video,
@@ -15,20 +16,45 @@ import {
   Maximize2,
   Copy,
   Reply,
+  Users,
 } from "lucide-react";
-import { DiscordChannel, DiscordMessage, AppSettings, UserPresence } from "../types";
+import {
+  DiscordChannel,
+  DiscordMessage,
+  AppSettings,
+  UserPresence,
+  DiscordUser,
+} from "../types";
 import { EmbedCard, formatMarkdownText } from "./EmbedCard";
 import { EmojiGifPicker } from "./EmojiGifPicker";
 import { StatusBadge } from "./StatusBadge";
 import { ContextMenu, ContextMenuItem } from "./ContextMenu";
 
+const QUICK_REACTION_EMOJIS = ["👍", "❤️", "😂", "🎉", "🔥", "🚀"];
+const EXPANDED_REACTION_EMOJIS = [
+  "👍", "👎", "❤️", "😂", "🎉", "🔥", "🚀", "👀",
+  "✨", "💯", "😢", "🙏", "😮", "💀", "👏", "💩",
+];
+
 interface ChatAreaProps {
   activeChannel: DiscordChannel | null;
   messages: DiscordMessage[];
-  onSendMessage: (content: string, attachment?: { name: string; dataUrl: string }) => Promise<void>;
+  onSendMessage: (
+    content: string,
+    attachment?: { name: string; dataUrl: string }
+  ) => Promise<void>;
   isLoading: boolean;
   settings: AppSettings;
   presences?: Record<string, UserPresence>;
+  onSelectUser?: (user: DiscordUser) => void;
+  isMemberListOpen?: boolean;
+  onToggleMemberList?: () => void;
+  typingUsers?: string[];
+  onToggleReaction?: (
+    messageId: string,
+    emoji: string,
+    isMe: boolean
+  ) => Promise<void>;
 }
 
 export const ChatArea: React.FC<ChatAreaProps> = ({
@@ -38,6 +64,11 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   isLoading,
   settings,
   presences = {},
+  onSelectUser,
+  isMemberListOpen = true,
+  onToggleMemberList,
+  typingUsers = [],
+  onToggleReaction,
 }) => {
   const [inputText, setInputText] = useState("");
   const [selectedFile, setSelectedFile] = useState<{
@@ -47,6 +78,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   } | null>(null);
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [showPicker, setShowPicker] = useState(false);
+  const [replyingTo, setReplyingTo] = useState<DiscordMessage | null>(null);
+  const [reactionPickerMsgId, setReactionPickerMsgId] = useState<string | null>(null);
 
   // Call states
   const [isInCall, setIsInCall] = useState(false);
@@ -63,6 +96,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textInputRef = useRef<HTMLInputElement>(null);
+  const lastTypingSentRef = useRef<number>(0);
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {
@@ -123,14 +157,37 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     }
   };
 
+  const handleInputChange = (val: string) => {
+    setInputText(val);
+
+    // Trigger typing event to Discord Gateway (throttled to once per 6 seconds)
+    if (val.trim() && activeChannel) {
+      const now = Date.now();
+      if (now - lastTypingSentRef.current > 6000) {
+        lastTypingSentRef.current = now;
+        invoke("trigger_typing", { channelId: activeChannel.id }).catch(() => {});
+      }
+    }
+  };
+
   const handleSend = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!inputText.trim() && !selectedFile) return;
 
-    const text = inputText;
+    let text = inputText;
+    if (replyingTo) {
+      const authorName =
+        replyingTo.author.global_name || replyingTo.author.username;
+      const snippet = replyingTo.content
+        ? replyingTo.content.slice(0, 100)
+        : "[attachment]";
+      text = `> **${authorName}**: ${snippet}\n${text}`;
+    }
+
     const file = selectedFile;
     setInputText("");
     setSelectedFile(null);
+    setReplyingTo(null);
 
     await onSendMessage(
       text,
@@ -154,6 +211,35 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const handleSelectGif = async (url: string) => {
     setShowPicker(false);
     await onSendMessage(url);
+  };
+
+  const handleReactionClick = async (
+    messageId: string,
+    emoji: string,
+    isMe: boolean
+  ) => {
+    setReactionPickerMsgId(null);
+    if (onToggleReaction) {
+      await onToggleReaction(messageId, emoji, isMe);
+    } else if (activeChannel) {
+      try {
+        if (isMe) {
+          await invoke("remove_reaction", {
+            channelId: activeChannel.id,
+            messageId,
+            emoji,
+          });
+        } else {
+          await invoke("add_reaction", {
+            channelId: activeChannel.id,
+            messageId,
+            emoji,
+          });
+        }
+      } catch (err) {
+        console.error("Failed to toggle reaction:", err);
+      }
+    }
   };
 
   const formatFileSize = (bytes: number) => {
@@ -184,18 +270,18 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         },
       },
       {
+        label: "Reply to Message",
+        icon: <Reply className="w-3.5 h-3.5" />,
+        onClick: () => {
+          setReplyingTo(msg);
+          textInputRef.current?.focus();
+        },
+      },
+      {
         label: "Copy Message ID",
         icon: <Hash className="w-3.5 h-3.5" />,
         onClick: () => {
           navigator.clipboard.writeText(msg.id);
-        },
-      },
-      {
-        label: "Reply to Message",
-        icon: <Reply className="w-3.5 h-3.5" />,
-        onClick: () => {
-          setInputText(`> ${msg.content.slice(0, 50)}...\n`);
-          textInputRef.current?.focus();
         },
       },
     ];
@@ -263,57 +349,80 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           )}
         </div>
 
-        {/* Right Header: Call Controls (Voice & Video) */}
-        {activeChannel && (
-          <div className="flex items-center gap-1">
-            {isInCall ? (
-              /* Active In-Call Capsule */
-              <div className="flex items-center gap-2 capsule-pill px-3 py-1 bg-emerald-500/20 border border-emerald-500/30">
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-                <span className="text-xs font-mono font-bold text-emerald-400">
-                  {formatTimer(callDuration)}
-                </span>
-                <button
-                  onClick={() => setIsCallMuted(!isCallMuted)}
-                  className={`p-1 rounded-md transition-colors cursor-pointer ${
-                    isCallMuted ? "text-red-400 bg-red-500/20" : "text-white/80 hover:bg-white/10"
-                  }`}
-                  title={isCallMuted ? "Unmute" : "Mute"}
-                >
-                  {isCallMuted ? <MicOff className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5" />}
-                </button>
-                <button
-                  onClick={handleEndCall}
-                  className="p-1 rounded-md text-red-400 hover:bg-red-500/30 transition-colors cursor-pointer"
-                  title="Disconnect Call"
-                >
-                  <PhoneOff className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            ) : (
-              /* Voice & Video Call Trigger Buttons */
-              <div className="flex items-center gap-1 text-slate-300">
-                <button
-                  onClick={handleStartCall}
-                  className="p-1.5 rounded-lg hover:bg-white/10 hover:text-white transition-colors cursor-pointer"
-                  title="Start Voice Call"
-                >
-                  <Phone className="w-4 h-4" />
-                </button>
-                <button
-                  onClick={handleStartCall}
-                  className="p-1.5 rounded-lg hover:bg-white/10 hover:text-white transition-colors cursor-pointer"
-                  title="Start Video Call"
-                >
-                  <Video className="w-4 h-4" />
-                </button>
-              </div>
-            )}
-          </div>
-        )}
+        {/* Right Header: Call Controls & Member List Toggle */}
+        <div className="flex items-center gap-1">
+          {activeChannel && (
+            <>
+              {isInCall ? (
+                /* Active In-Call Capsule */
+                <div className="flex items-center gap-2 capsule-pill px-3 py-1 bg-emerald-500/20 border border-emerald-500/30">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                  <span className="text-xs font-mono font-bold text-emerald-400">
+                    {formatTimer(callDuration)}
+                  </span>
+                  <button
+                    onClick={() => setIsCallMuted(!isCallMuted)}
+                    className={`p-1 rounded-md transition-colors cursor-pointer ${
+                      isCallMuted
+                        ? "text-red-400 bg-red-500/20"
+                        : "text-white/80 hover:bg-white/10"
+                    }`}
+                    title={isCallMuted ? "Unmute" : "Mute"}
+                  >
+                    {isCallMuted ? (
+                      <MicOff className="w-3.5 h-3.5" />
+                    ) : (
+                      <Mic className="w-3.5 h-3.5" />
+                    )}
+                  </button>
+                  <button
+                    onClick={handleEndCall}
+                    className="p-1 rounded-md text-red-400 hover:bg-red-500/30 transition-colors cursor-pointer"
+                    title="Disconnect Call"
+                  >
+                    <PhoneOff className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ) : (
+                /* Voice & Video Call Trigger Buttons */
+                <div className="flex items-center gap-1 text-slate-300">
+                  <button
+                    onClick={handleStartCall}
+                    className="p-1.5 rounded-lg hover:bg-white/10 hover:text-white transition-colors cursor-pointer"
+                    title="Start Voice Call"
+                  >
+                    <Phone className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={handleStartCall}
+                    className="p-1.5 rounded-lg hover:bg-white/10 hover:text-white transition-colors cursor-pointer"
+                    title="Start Video Call"
+                  >
+                    <Video className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+
+          {/* Member List Toggle Button (for server channels) */}
+          {!isDM && activeChannel && onToggleMemberList && (
+            <button
+              onClick={onToggleMemberList}
+              className={`p-1.5 rounded-lg transition-colors cursor-pointer ml-1 ${
+                isMemberListOpen
+                  ? "bg-white/15 text-white"
+                  : "text-slate-300 hover:bg-white/10 hover:text-white"
+              }`}
+              title={isMemberListOpen ? "Hide Member List" : "Show Member List"}
+            >
+              <Users className="w-4 h-4" />
+            </button>
+          )}
+        </div>
       </div>
 
-      {/* Messages Feed (space-y-3 REMOVED to eliminate huge spacing!) */}
+      {/* Messages Feed */}
       <div className="flex-1 overflow-y-auto px-4 py-2">
         {isLoading ? (
           <div className="h-full flex items-center justify-center text-white/40 text-sm">
@@ -323,7 +432,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           <div className="h-full flex flex-col items-center justify-center text-white/30 text-sm">
             <Hash className="w-12 h-12 mb-2 text-white/20" />
             <span>Welcome to #{activeChannel?.name || "chat"}!</span>
-            <span className="text-xs text-white/20 mt-1">This is the start of this channel.</span>
+            <span className="text-xs text-white/20 mt-1">
+              This is the start of this channel.
+            </span>
           </div>
         ) : (
           messages.map((msg, index) => {
@@ -344,7 +455,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               <div
                 key={msg.id}
                 onContextMenu={(e) => handleMessageContextMenu(e, msg)}
-                className={`group flex gap-3 rounded-xl px-2.5 transition-colors hover:bg-white/[0.03] ${
+                className={`group relative flex gap-3 rounded-xl px-2.5 transition-colors hover:bg-white/[0.03] ${
                   isConsecutive
                     ? "mt-[1px] py-[2px]"
                     : isCompact
@@ -352,10 +463,72 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                     : "mt-3.5 pt-2 pb-1"
                 }`}
               >
+                {/* Floating Quick Action Bar (Hover on message) */}
+                <div className="absolute -top-3.5 right-4 z-10 hidden group-hover:flex items-center bg-[#18191c] border border-white/10 rounded-lg shadow-xl px-1 py-0.5 gap-0.5 select-none animate-fadeIn">
+                  {/* Quick Emojis */}
+                  {QUICK_REACTION_EMOJIS.slice(0, 3).map((emoji) => (
+                    <button
+                      key={emoji}
+                      onClick={() => handleReactionClick(msg.id, emoji, false)}
+                      className="p-1 hover:bg-white/10 rounded text-sm transition-transform hover:scale-125 cursor-pointer leading-none"
+                      title={`React with ${emoji}`}
+                    >
+                      {emoji}
+                    </button>
+                  ))}
+
+                  <div className="w-[1px] h-3.5 bg-white/10 mx-0.5" />
+
+                  {/* Add reaction picker button */}
+                  <button
+                    onClick={() =>
+                      setReactionPickerMsgId(
+                        reactionPickerMsgId === msg.id ? null : msg.id
+                      )
+                    }
+                    className="p-1 rounded hover:bg-white/10 text-white/60 hover:text-white transition-colors cursor-pointer"
+                    title="Add Reaction"
+                  >
+                    <SmilePlus className="w-3.5 h-3.5" />
+                  </button>
+
+                  {/* Reply button */}
+                  <button
+                    onClick={() => {
+                      setReplyingTo(msg);
+                      textInputRef.current?.focus();
+                    }}
+                    className="p-1 rounded hover:bg-white/10 text-white/60 hover:text-white transition-colors cursor-pointer"
+                    title="Reply"
+                  >
+                    <Reply className="w-3.5 h-3.5" />
+                  </button>
+
+                  {/* Copy button */}
+                  <button
+                    onClick={() => {
+                      if (msg.content) navigator.clipboard.writeText(msg.content);
+                    }}
+                    className="p-1 rounded hover:bg-white/10 text-white/60 hover:text-white transition-colors cursor-pointer"
+                    title="Copy Text"
+                  >
+                    <Copy className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+
+                {/* Avatar or Timestamp */}
                 {!isConsecutive ? (
-                  <div className="w-10 h-10 rounded-full overflow-hidden bg-white/10 shrink-0 mt-0.5 select-none">
+                  <div
+                    onClick={() => onSelectUser?.(msg.author)}
+                    className="w-10 h-10 rounded-full overflow-hidden bg-white/10 shrink-0 mt-0.5 select-none cursor-pointer hover:opacity-85 transition-opacity"
+                    title={`View @${msg.author.username}'s profile`}
+                  >
                     {avatarUrl ? (
-                      <img src={avatarUrl} alt="" className="w-full h-full object-cover" />
+                      <img
+                        src={avatarUrl}
+                        alt=""
+                        className="w-full h-full object-cover"
+                      />
                     ) : (
                       <div className="w-full h-full flex items-center justify-center font-bold text-sm text-white">
                         {msg.author.username?.[0]?.toUpperCase() || "U"}
@@ -371,7 +544,10 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 <div className="flex-1 overflow-hidden">
                   {!isConsecutive && (
                     <div className="flex items-baseline gap-2 select-none mb-0.5">
-                      <span className="font-semibold text-sm text-white hover:underline cursor-pointer">
+                      <span
+                        onClick={() => onSelectUser?.(msg.author)}
+                        className="font-semibold text-sm text-white hover:underline cursor-pointer"
+                      >
                         {msg.author.global_name || msg.author.username}
                       </span>
                       <span className="text-[11px] text-white/40 font-mono">
@@ -414,7 +590,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                         const isImage =
                           !isVideo &&
                           (att.content_type?.startsWith("image/") ||
-                            Boolean(att.filename.match(/\.(png|jpe?g|gif|webp)$/i)));
+                            Boolean(
+                              att.filename.match(/\.(png|jpe?g|gif|webp)$/i)
+                            ));
 
                         // 1. INLINE VIDEO PLAYER
                         if (isVideo) {
@@ -431,7 +609,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                                 className="w-full max-h-[400px] rounded-2xl bg-black object-contain"
                               />
                               <div className="px-3 py-1.5 flex items-center justify-between text-[11px] text-white/50 bg-black/40 border-t border-white/5 font-mono">
-                                <span className="truncate max-w-[280px] text-white/70">{att.filename}</span>
+                                <span className="truncate max-w-[280px] text-white/70">
+                                  {att.filename}
+                                </span>
                                 <span>{formatFileSize(att.size)}</span>
                               </div>
                             </div>
@@ -470,10 +650,83 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                           >
                             <Paperclip className="w-4 h-4 text-slate-400" />
                             <span className="underline">{att.filename}</span>
-                            <span className="text-white/40">({formatFileSize(att.size)})</span>
+                            <span className="text-white/40">
+                              ({formatFileSize(att.size)})
+                            </span>
                           </a>
                         );
                       })}
+                    </div>
+                  )}
+
+                  {/* Message Reactions Pills */}
+                  {msg.reactions && msg.reactions.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-1.5 items-center select-none">
+                      {msg.reactions.map((reaction, rIdx) => {
+                        const isCustom = Boolean(reaction.emoji.id);
+                        const emojiKey = isCustom
+                          ? `${reaction.emoji.name}:${reaction.emoji.id}`
+                          : reaction.emoji.name;
+                        const isMe = reaction.me;
+
+                        return (
+                          <button
+                            key={rIdx}
+                            onClick={() =>
+                              handleReactionClick(msg.id, emojiKey, isMe)
+                            }
+                            className={`flex items-center gap-1.5 px-2 py-0.5 rounded-lg border text-xs font-medium transition-all cursor-pointer ${
+                              isMe
+                                ? "bg-[var(--accent-dim)] border-[var(--accent)] text-[var(--accent)] shadow-sm"
+                                : "bg-white/5 border-white/10 text-white/70 hover:bg-white/10 hover:text-white"
+                            }`}
+                            title={reaction.emoji.name}
+                          >
+                            {isCustom ? (
+                              <img
+                                src={`https://cdn.discordapp.com/emojis/${reaction.emoji.id}.png?size=32`}
+                                alt={reaction.emoji.name}
+                                className="w-4 h-4 object-contain"
+                              />
+                            ) : (
+                              <span className="text-sm leading-none">
+                                {reaction.emoji.name}
+                              </span>
+                            )}
+                            <span className="text-[11px] font-mono">
+                              {reaction.count}
+                            </span>
+                          </button>
+                        );
+                      })}
+
+                      {/* Small button to add another reaction */}
+                      <button
+                        onClick={() =>
+                          setReactionPickerMsgId(
+                            reactionPickerMsgId === msg.id ? null : msg.id
+                          )
+                        }
+                        className="p-1 rounded-lg bg-white/5 hover:bg-white/10 text-white/40 hover:text-white/80 transition-colors cursor-pointer"
+                        title="Add Reaction"
+                      >
+                        <SmilePlus className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Inline Reaction Picker Popout for this Message */}
+                  {reactionPickerMsgId === msg.id && (
+                    <div className="mt-2 p-2 bg-[#1e1f22] border border-white/10 rounded-xl shadow-2xl z-20 flex flex-wrap gap-1 max-w-xs animate-fadeIn select-none">
+                      {EXPANDED_REACTION_EMOJIS.map((emoji) => (
+                        <button
+                          key={emoji}
+                          onClick={() => handleReactionClick(msg.id, emoji, false)}
+                          className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-white/10 text-lg transition-transform hover:scale-125 cursor-pointer leading-none"
+                        >
+                          {emoji}
+                        </button>
+                      ))}
                     </div>
                   )}
                 </div>
@@ -490,7 +743,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           <div className="flex items-center gap-2 text-xs text-white truncate">
             <ImageIcon className="w-4 h-4 text-[var(--accent)] shrink-0" />
             <span className="truncate max-w-xs">{selectedFile.name}</span>
-            <span className="text-white/40">({formatFileSize(selectedFile.size)})</span>
+            <span className="text-white/40">
+              ({formatFileSize(selectedFile.size)})
+            </span>
           </div>
           <button
             onClick={() => setSelectedFile(null)}
@@ -498,6 +753,55 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           >
             <X className="w-4 h-4" />
           </button>
+        </div>
+      )}
+
+      {/* Replying Banner */}
+      {replyingTo && (
+        <div className="px-4 py-1.5 bg-white/5 border-t border-white/5 flex items-center justify-between text-xs text-white/70 select-none">
+          <div className="flex items-center gap-2 truncate">
+            <Reply className="w-3.5 h-3.5 text-[var(--accent)] shrink-0" />
+            <span>Replying to</span>
+            <span className="font-semibold text-white">
+              @{replyingTo.author.global_name || replyingTo.author.username}
+            </span>
+            <span className="text-white/40 truncate max-w-md">
+              {replyingTo.content || "[attachment]"}
+            </span>
+          </div>
+          <button
+            onClick={() => setReplyingTo(null)}
+            className="p-1 rounded-lg hover:bg-white/10 text-white/50 hover:text-white cursor-pointer"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
+      {/* Real-time Typing Indicator Bar */}
+      {typingUsers && typingUsers.length > 0 && (
+        <div className="px-4 py-1 text-xs text-white/60 flex items-center gap-2 select-none animate-fadeIn">
+          <div className="flex items-center gap-1">
+            <span
+              className="w-1.5 h-1.5 rounded-full bg-[var(--accent)] animate-bounce"
+              style={{ animationDelay: "0ms" }}
+            />
+            <span
+              className="w-1.5 h-1.5 rounded-full bg-[var(--accent)] animate-bounce"
+              style={{ animationDelay: "150ms" }}
+            />
+            <span
+              className="w-1.5 h-1.5 rounded-full bg-[var(--accent)] animate-bounce"
+              style={{ animationDelay: "300ms" }}
+            />
+          </div>
+          <span>
+            {typingUsers.length === 1
+              ? `${typingUsers[0]} is typing...`
+              : typingUsers.length === 2
+              ? `${typingUsers[0]} and ${typingUsers[1]} are typing...`
+              : `Several people are typing...`}
+          </span>
         </div>
       )}
 
@@ -536,7 +840,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             ref={textInputRef}
             type="text"
             value={inputText}
-            onChange={(e) => setInputText(e.target.value)}
+            onChange={(e) => handleInputChange(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={
               activeChannel

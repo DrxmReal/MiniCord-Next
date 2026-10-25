@@ -14,6 +14,68 @@ export interface DiscordUser {
   discriminator: string;
   global_name?: string | null;
   avatar?: string | null;
+  bio?: string | null;
+  banner?: string | null;
+  banner_color?: string | null;
+  accent_color?: number | null;
+}
+
+export interface DiscordRole {
+  id: string;
+  name: string;
+  color: number;
+  hoist: boolean;
+  position: number;
+  permissions?: string;
+  icon?: string | null;
+}
+
+export interface DiscordMember {
+  user: DiscordUser;
+  nick?: string | null;
+  roles: string[];
+  joined_at: string;
+  premium_since?: string | null;
+  deaf?: boolean;
+  mute?: boolean;
+}
+
+export interface DiscordReaction {
+  count: number;
+  me: boolean;
+  emoji: {
+    id?: string | null;
+    name: string;
+  };
+}
+
+export interface DiscordRelationship {
+  id: string;
+  type: number; // 1 = Friend, 2 = Blocked, 3 = Incoming Request, 4 = Outgoing Request
+  nickname?: string | null;
+  user: DiscordUser;
+}
+
+export interface UserProfileData {
+  user: DiscordUser;
+  connected_accounts?: Array<{ type: string; name: string }>;
+  premium_since?: string | null;
+  badges?: Array<{ id: string; description: string; icon: string }>;
+  user_profile?: {
+    bio?: string;
+    pronouns?: string;
+  };
+  mutual_guilds?: Array<{ id: string; nick?: string }>;
+}
+
+export interface TypingEvent {
+  channel_id: string;
+  user_id: string;
+  timestamp: number;
+  member?: {
+    user: DiscordUser;
+    nick?: string;
+  };
 }
 
 export interface DiscordGuild {
@@ -107,6 +169,8 @@ export interface DiscordMessage {
   author: DiscordUser;
   attachments?: DiscordAttachment[];
   embeds?: DiscordEmbed[];
+  reactions?: DiscordReaction[];
+  referenced_message?: DiscordMessage | null;
 }
 
 export interface UserPresence {

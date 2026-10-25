@@ -4,6 +4,21 @@ use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use serde_json::json;
 use base64::Engine;
 
+fn url_encode(input: &str) -> String {
+    let mut encoded = String::with_capacity(input.len() * 3);
+    for byte in input.bytes() {
+        match byte {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(byte as char);
+            }
+            _ => {
+                encoded.push_str(&format!("%{:02X}", byte));
+            }
+        }
+    }
+    encoded
+}
+
 #[derive(Clone)]
 pub struct DiscordState {
     pub client: Arc<RwLock<Option<reqwest::Client>>>,
@@ -219,6 +234,103 @@ impl DiscordState {
             Ok(format!("data:{};base64,{}", content_type, b64))
         } else {
             Err(format!("CDN status: {}", resp.status()))
+        }
+    }
+
+    pub async fn get_guild_members(&self, guild_id: &str, limit: Option<u32>) -> Result<Vec<serde_json::Value>, String> {
+        let client = self.get_client().await?;
+        let lim = limit.unwrap_or(1000).min(1000);
+        let url = format!("https://discord.com/api/v10/guilds/{}/members?limit={}", guild_id, lim);
+        let resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
+        if resp.status().is_success() {
+            resp.json::<Vec<serde_json::Value>>().await.map_err(|e| e.to_string())
+        } else {
+            Err(format!("HTTP {}", resp.status()))
+        }
+    }
+
+    pub async fn get_guild_roles(&self, guild_id: &str) -> Result<Vec<serde_json::Value>, String> {
+        let client = self.get_client().await?;
+        let url = format!("https://discord.com/api/v10/guilds/{}/roles", guild_id);
+        let resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
+        if resp.status().is_success() {
+            resp.json::<Vec<serde_json::Value>>().await.map_err(|e| e.to_string())
+        } else {
+            Err(format!("HTTP {}", resp.status()))
+        }
+    }
+
+    pub async fn get_relationships(&self) -> Result<Vec<serde_json::Value>, String> {
+        let client = self.get_client().await?;
+        let url = "https://discord.com/api/v10/users/@me/relationships";
+        let resp = client.get(url).send().await.map_err(|e| e.to_string())?;
+        if resp.status().is_success() {
+            resp.json::<Vec<serde_json::Value>>().await.map_err(|e| e.to_string())
+        } else {
+            Err(format!("HTTP {}", resp.status()))
+        }
+    }
+
+    pub async fn get_user_profile(&self, user_id: &str) -> Result<serde_json::Value, String> {
+        let client = self.get_client().await?;
+        let url = format!("https://discord.com/api/v10/users/{}/profile?with_mutual_guilds=true", user_id);
+        if let Ok(resp) = client.get(&url).send().await {
+            if resp.status().is_success() {
+                if let Ok(val) = resp.json::<serde_json::Value>().await {
+                    return Ok(val);
+                }
+            }
+        }
+
+        // Fallback to basic user endpoint
+        let fallback_url = format!("https://discord.com/api/v10/users/{}", user_id);
+        let resp = client.get(&fallback_url).send().await.map_err(|e| e.to_string())?;
+        if resp.status().is_success() {
+            let u = resp.json::<serde_json::Value>().await.map_err(|e| e.to_string())?;
+            Ok(json!({ "user": u }))
+        } else {
+            Err(format!("HTTP {}", resp.status()))
+        }
+    }
+
+    pub async fn trigger_typing(&self, channel_id: &str) -> Result<bool, String> {
+        let client = self.get_client().await?;
+        let url = format!("https://discord.com/api/v10/channels/{}/typing", channel_id);
+        let resp = client.post(&url).send().await.map_err(|e| e.to_string())?;
+        Ok(resp.status().is_success())
+    }
+
+    pub async fn add_reaction(&self, channel_id: &str, message_id: &str, emoji: &str) -> Result<bool, String> {
+        let client = self.get_client().await?;
+        let encoded_emoji = url_encode(emoji);
+        let url = format!(
+            "https://discord.com/api/v10/channels/{}/messages/{}/reactions/{}/@me",
+            channel_id, message_id, encoded_emoji
+        );
+        let resp = client.put(&url).header("content-length", "0").send().await.map_err(|e| e.to_string())?;
+        Ok(resp.status().is_success() || resp.status().as_u16() == 204)
+    }
+
+    pub async fn remove_reaction(&self, channel_id: &str, message_id: &str, emoji: &str) -> Result<bool, String> {
+        let client = self.get_client().await?;
+        let encoded_emoji = url_encode(emoji);
+        let url = format!(
+            "https://discord.com/api/v10/channels/{}/messages/{}/reactions/{}/@me",
+            channel_id, message_id, encoded_emoji
+        );
+        let resp = client.delete(&url).send().await.map_err(|e| e.to_string())?;
+        Ok(resp.status().is_success() || resp.status().as_u16() == 204)
+    }
+
+    pub async fn create_dm(&self, recipient_id: &str) -> Result<serde_json::Value, String> {
+        let client = self.get_client().await?;
+        let url = "https://discord.com/api/v10/users/@me/channels";
+        let payload = json!({ "recipient_id": recipient_id });
+        let resp = client.post(url).json(&payload).send().await.map_err(|e| e.to_string())?;
+        if resp.status().is_success() {
+            resp.json::<serde_json::Value>().await.map_err(|e| e.to_string())
+        } else {
+            Err(format!("HTTP {}", resp.status()))
         }
     }
 }
