@@ -38,5 +38,5 @@ debug = 0
 opt-level = 2
 codegen-units = 16
 lto = false
-panic = "abort"
-strip = true
+panic = "unwind"
+strip = false
