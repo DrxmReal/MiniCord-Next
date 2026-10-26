@@ -333,4 +333,27 @@ impl DiscordState {
             Err(format!("HTTP {}", resp.status()))
         }
     }
+
+    pub async fn patch_voice_state(
+        &self,
+        guild_id: &str,
+        channel_id: Option<&str>,
+        self_mute: bool,
+        self_deaf: bool,
+    ) -> Result<serde_json::Value, String> {
+        let client = self.get_client().await?;
+        let url = format!("https://discord.com/api/v10/guilds/{}/voice-states/@me", guild_id);
+        let payload = json!({
+            "channel_id": channel_id,
+            "self_mute": self_mute,
+            "self_deaf": self_deaf,
+            "suppress": false
+        });
+        let resp = client.patch(&url).json(&payload).send().await.map_err(|e| e.to_string())?;
+        if resp.status().is_success() || resp.status().as_u16() == 204 {
+            Ok(json!({ "ok": true }))
+        } else {
+            Ok(json!({ "ok": false, "status": resp.status().as_u16() }))
+        }
+    }
 }

@@ -150,7 +150,7 @@ export const GuildRail: React.FC<GuildRailProps> = ({
   };
 
   return (
-    <nav className="w-18 h-full py-3 flex flex-col items-center gap-2 select-none shrink-0 bg-[var(--bg-deep)]/60 backdrop-blur-md border-r border-white/5">
+    <nav className="w-[72px] min-w-[72px] max-w-[72px] h-full py-3 flex flex-col items-center gap-2 select-none shrink-0 bg-[var(--bg-deep)]/60 backdrop-blur-md border-r border-white/5">
       {/* Home / Direct Messages button */}
       <div className="relative flex items-center justify-center w-full group">
         <div
@@ -176,7 +176,7 @@ export const GuildRail: React.FC<GuildRailProps> = ({
       <div className="w-8 h-[2px] bg-white/10 rounded-full my-1" />
 
       {/* Guilds List with Drag & Drop */}
-      <div className="flex-1 w-full overflow-y-auto overflow-x-hidden flex flex-col items-center gap-2 pr-1">
+      <div className="flex-1 w-full overflow-y-auto overflow-x-hidden flex flex-col items-center gap-2 no-scrollbar">
         {orderedGuilds.map((guild, index) => {
           const isActive = activeGuildId === guild.id;
           const isDragging = draggedIdx === index;

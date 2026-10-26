@@ -170,6 +170,48 @@ async fn create_dm(recipient_id: String, state: State<'_, DiscordState>) -> Resu
 }
 
 #[tauri::command]
+async fn set_voice_state(
+    guild_id: Option<String>,
+    channel_id: Option<String>,
+    self_mute: Option<bool>,
+    self_deaf: Option<bool>,
+    gw_state: State<'_, Arc<GatewayState>>,
+    discord_state: State<'_, DiscordState>,
+) -> Result<bool, String> {
+    let m = self_mute.unwrap_or(false);
+    let d = self_deaf.unwrap_or(false);
+
+    let tx_lock = gw_state.cmd_tx.read().await;
+    if let Some(tx) = tx_lock.as_ref() {
+        let _ = tx.send(discord_gateway::GatewayCommand::UpdateVoiceState {
+            guild_id: guild_id.clone(),
+            channel_id: channel_id.clone(),
+            self_mute: m,
+            self_deaf: d,
+        }).await;
+    }
+
+    if let Some(gid) = guild_id.as_deref() {
+        let _ = discord_state.patch_voice_state(gid, channel_id.as_deref(), m, d).await;
+    }
+
+    Ok(true)
+}
+
+#[tauri::command]
+async fn get_guild_voice_states(
+    guild_id: String,
+    gw_state: State<'_, Arc<GatewayState>>,
+) -> Result<Vec<discord_gateway::VoiceState>, String> {
+    let map = gw_state.voice_states.read().await;
+    if let Some(guild_map) = map.get(&guild_id) {
+        Ok(guild_map.values().cloned().collect())
+    } else {
+        Ok(vec![])
+    }
+}
+
+#[tauri::command]
 async fn logout(
     state: State<'_, DiscordState>,
     gw_state: State<'_, Arc<GatewayState>>,
@@ -224,7 +266,9 @@ pub fn run() {
             trigger_typing,
             add_reaction,
             remove_reaction,
-            create_dm
+            create_dm,
+            set_voice_state,
+            get_guild_voice_states
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

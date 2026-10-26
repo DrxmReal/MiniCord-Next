@@ -22,6 +22,7 @@ import {
   DiscordMember,
   DiscordRole,
   TypingEvent,
+  DiscordVoiceState,
 } from "./types";
 import "./App.css";
 
@@ -74,6 +75,16 @@ export default function App() {
   const [guildRoles, setGuildRoles] = useState<DiscordRole[]>([]);
   const [guildMembers, setGuildMembers] = useState<DiscordMember[]>([]);
 
+  // Voice State Management
+  const [voiceStates, setVoiceStates] = useState<Record<string, DiscordVoiceState>>({});
+  const [connectedVoice, setConnectedVoice] = useState<{
+    guildId: string | null;
+    channelId: string;
+    channelName: string;
+  } | null>(null);
+  const [isVoiceMuted, setIsVoiceMuted] = useState(false);
+  const [isVoiceDeafened, setIsVoiceDeafened] = useState(false);
+
   // Real-time typing indicators
   const [typingMap, setTypingMap] = useState<
     Record<string, Record<string, { username: string; expiresAt: number }>>
@@ -95,6 +106,13 @@ export default function App() {
   currentUserRef.current = currentUser;
   const settingsRef = useRef<AppSettings>(settings);
   settingsRef.current = settings;
+
+  const connectedVoiceRef = useRef(connectedVoice);
+  connectedVoiceRef.current = connectedVoice;
+  const isVoiceMutedRef = useRef(isVoiceMuted);
+  isVoiceMutedRef.current = isVoiceMuted;
+  const isVoiceDeafenedRef = useRef(isVoiceDeafened);
+  isVoiceDeafenedRef.current = isVoiceDeafened;
 
   const applyAccentColor = (hex: string) => {
     const root = document.documentElement;
@@ -347,6 +365,55 @@ export default function App() {
       }
     });
 
+    // 9. Listen to Real-time Guild Voice States Sync
+    const unlistenGuildVoiceStates = listen<{
+      guild_id: string;
+      voice_states: DiscordVoiceState[];
+    }>("gateway-guild-voice-states", (event) => {
+      const { voice_states } = event.payload;
+      setVoiceStates((prev) => {
+        const next = { ...prev };
+        for (const vs of voice_states) {
+          next[vs.user_id] = vs;
+        }
+        return next;
+      });
+    });
+
+    // 10. Listen to Real-time Single Voice State Updates
+    const unlistenVoiceStateUpdate = listen<DiscordVoiceState>(
+      "gateway-voice-state-update",
+      (event) => {
+        const vs = event.payload;
+        setVoiceStates((prev) => {
+          const next = { ...prev };
+          if (!vs.channel_id) {
+            delete next[vs.user_id];
+          } else {
+            next[vs.user_id] = vs;
+          }
+          return next;
+        });
+
+        // Sync connectedVoice if the update is for current user
+        const me = currentUserRef.current;
+        if (me && vs.user_id === me.id) {
+          if (!vs.channel_id) {
+            setConnectedVoice(null);
+          } else {
+            setConnectedVoice((prev) => {
+              if (prev && prev.channelId === vs.channel_id) return prev;
+              return {
+                guildId: vs.guild_id || null,
+                channelId: vs.channel_id!,
+                channelName: "Voice Channel",
+              };
+            });
+          }
+        }
+      }
+    );
+
     return () => {
       unlistenTheme.then((u) => u());
       unlistenPresences.then((u) => u());
@@ -355,6 +422,8 @@ export default function App() {
       unlistenTyping.then((u) => u());
       unlistenReactionAdd.then((u) => u());
       unlistenReactionRemove.then((u) => u());
+      unlistenGuildVoiceStates.then((u) => u());
+      unlistenVoiceStateUpdate.then((u) => u());
     };
   }, []);
 
@@ -478,6 +547,21 @@ export default function App() {
         setGuildRoles(roles);
         setGuildMembers(members);
 
+        // Fetch initial voice states for this guild
+        try {
+          const vStates = await invoke<DiscordVoiceState[]>(
+            "get_guild_voice_states",
+            { guildId: guild.id }
+          );
+          const vMap: Record<string, DiscordVoiceState> = {};
+          for (const vs of vStates) {
+            vMap[vs.user_id] = vs;
+          }
+          setVoiceStates(vMap);
+        } catch (e) {
+          console.error("Failed to fetch initial guild voice states:", e);
+        }
+
         // Find the first text/announcement channel (type 0 or 5) by lowest position
         const textChannels = guildChannels
           .filter((c) => c.type === 0 || c.type === 5)
@@ -516,6 +600,102 @@ export default function App() {
       console.error("Failed to load messages:", err);
     } finally {
       setIsLoadingMessages(false);
+    }
+  };
+
+  // Join Discord Voice Channel
+  const handleJoinVoice = async (channel: DiscordChannel) => {
+    if (!isTauri) return;
+    const guildId = activeGuild?.id || null;
+    try {
+      await invoke("set_voice_state", {
+        guildId,
+        channelId: channel.id,
+        selfMute: isVoiceMutedRef.current,
+        selfDeaf: isVoiceDeafenedRef.current,
+      });
+      setConnectedVoice({
+        guildId,
+        channelId: channel.id,
+        channelName: channel.name,
+      });
+      if (currentUser) {
+        setVoiceStates((prev) => ({
+          ...prev,
+          [currentUser.id]: {
+            guild_id: guildId,
+            channel_id: channel.id,
+            user_id: currentUser.id,
+            self_mute: isVoiceMutedRef.current,
+            self_deaf: isVoiceDeafenedRef.current,
+          },
+        }));
+      }
+    } catch (err) {
+      console.error("Failed to join voice channel:", err);
+    }
+  };
+
+  // Disconnect from active Discord Voice Channel
+  const handleDisconnectVoice = async () => {
+    if (!isTauri) return;
+    const cur = connectedVoiceRef.current;
+    if (!cur) return;
+    try {
+      await invoke("set_voice_state", {
+        guildId: cur.guildId,
+        channelId: null,
+        selfMute: isVoiceMutedRef.current,
+        selfDeaf: isVoiceDeafenedRef.current,
+      });
+      if (currentUser) {
+        setVoiceStates((prev) => {
+          const next = { ...prev };
+          delete next[currentUser.id];
+          return next;
+        });
+      }
+      setConnectedVoice(null);
+    } catch (err) {
+      console.error("Failed to disconnect voice:", err);
+    }
+  };
+
+  // Toggle Voice Mute
+  const handleToggleVoiceMute = async () => {
+    const nextMute = !isVoiceMuted;
+    setIsVoiceMuted(nextMute);
+    const cur = connectedVoiceRef.current;
+    if (isTauri && cur) {
+      try {
+        await invoke("set_voice_state", {
+          guildId: cur.guildId,
+          channelId: cur.channelId,
+          selfMute: nextMute,
+          selfDeaf: isVoiceDeafened,
+        });
+      } catch (err) {
+        console.error("Failed to toggle voice mute:", err);
+      }
+    }
+  };
+
+  // Toggle Voice Deafen
+  const handleToggleVoiceDeafen = async () => {
+    const nextDeaf = !isVoiceDeafened;
+    setIsVoiceDeafened(nextDeaf);
+    const cur = connectedVoiceRef.current;
+    if (isTauri && cur) {
+      try {
+        await invoke("set_voice_state", {
+          guildId: cur.guildId,
+          channelId: cur.channelId,
+          selfMute: isVoiceMuted,
+          selfDeaf: nextDeaf,
+        });
+      } catch (err) {
+        console.error("Failed to toggle voice deafen:", err);
+      }
     }
   };
 
@@ -751,6 +931,15 @@ export default function App() {
             setIsFriendsTabActive(true);
             setActiveChannel(null);
           }}
+          voiceStates={voiceStates}
+          connectedVoice={connectedVoice}
+          onJoinVoice={handleJoinVoice}
+          onDisconnectVoice={handleDisconnectVoice}
+          isVoiceMuted={isVoiceMuted}
+          isVoiceDeafened={isVoiceDeafened}
+          onToggleVoiceMute={handleToggleVoiceMute}
+          onToggleVoiceDeafen={handleToggleVoiceDeafen}
+          guildMembers={guildMembers}
         />
 
         {/* Center Main View: Friends Dashboard OR Chat Area */}
@@ -784,6 +973,14 @@ export default function App() {
             guildMembers={guildMembers}
             currentUser={currentUser}
             onSelectChannel={handleSelectChannel}
+            connectedVoice={connectedVoice}
+            voiceStates={voiceStates}
+            onJoinVoice={handleJoinVoice}
+            onDisconnectVoice={handleDisconnectVoice}
+            isVoiceMuted={isVoiceMuted}
+            isVoiceDeafened={isVoiceDeafened}
+            onToggleVoiceMute={handleToggleVoiceMute}
+            onToggleVoiceDeafen={handleToggleVoiceDeafen}
           />
         )}
 

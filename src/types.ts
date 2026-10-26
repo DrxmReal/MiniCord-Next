@@ -78,6 +78,20 @@ export interface TypingEvent {
   };
 }
 
+export interface DiscordVoiceState {
+  guild_id?: string | null;
+  channel_id?: string | null;
+  user_id: string;
+  session_id?: string;
+  deaf?: boolean;
+  mute?: boolean;
+  self_deaf?: boolean;
+  self_mute?: boolean;
+  self_video?: boolean;
+  suppress?: boolean;
+  member?: DiscordMember | null;
+}
+
 export interface DiscordGuild {
   id: string;
   name: string;

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   Hash,
@@ -17,6 +17,9 @@ import {
   Copy,
   Reply,
   Users,
+  Volume2,
+  Headphones,
+  MessageSquare,
 } from "lucide-react";
 import {
   DiscordChannel,
@@ -27,6 +30,7 @@ import {
   DiscordRole,
   DiscordMember,
   MentionContext,
+  DiscordVoiceState,
 } from "../types";
 import { EmbedCard, formatMarkdownText } from "./EmbedCard";
 import { EmojiGifPicker } from "./EmojiGifPicker";
@@ -63,6 +67,18 @@ interface ChatAreaProps {
   guildMembers?: DiscordMember[];
   currentUser?: DiscordUser | null;
   onSelectChannel?: (channel: DiscordChannel) => void;
+  connectedVoice?: {
+    guildId: string | null;
+    channelId: string;
+    channelName: string;
+  } | null;
+  voiceStates?: Record<string, DiscordVoiceState>;
+  onJoinVoice?: (channel: DiscordChannel) => void;
+  onDisconnectVoice?: () => void;
+  isVoiceMuted?: boolean;
+  isVoiceDeafened?: boolean;
+  onToggleVoiceMute?: () => void;
+  onToggleVoiceDeafen?: () => void;
 }
 
 export const ChatArea: React.FC<ChatAreaProps> = ({
@@ -82,6 +98,14 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   guildMembers = [],
   currentUser = null,
   onSelectChannel,
+  connectedVoice = null,
+  voiceStates = {},
+  onJoinVoice,
+  onDisconnectVoice,
+  isVoiceMuted = false,
+  isVoiceDeafened = false,
+  onToggleVoiceMute,
+  onToggleVoiceDeafen,
 }) => {
   const [inputText, setInputText] = useState("");
   const [selectedFile, setSelectedFile] = useState<{
@@ -94,7 +118,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [replyingTo, setReplyingTo] = useState<DiscordMessage | null>(null);
   const [reactionPickerMsgId, setReactionPickerMsgId] = useState<string | null>(null);
 
-  // Call states
+  // Voice room and call states
+  const [showVoiceChat, setShowVoiceChat] = useState(false);
   const [isInCall, setIsInCall] = useState(false);
   const [callDuration, setCallDuration] = useState(0);
   const [isCallMuted, setIsCallMuted] = useState(false);
@@ -458,8 +483,198 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   };
 
   const isDM = activeChannel?.type === 1 || activeChannel?.type === 3;
+  const isVoiceChannel = activeChannel?.type === 2;
+  const isConnectedToActiveVoice =
+    isVoiceChannel && connectedVoice?.channelId === activeChannel?.id;
   const recipient = activeChannel?.recipient;
   const recipientPresence = recipient ? presences[recipient.id] : null;
+
+  const currentChannelVoiceStates = useMemo(() => {
+    if (!isVoiceChannel || !activeChannel) return [];
+    const list = Object.values(voiceStates).filter(
+      (vs) => vs.channel_id === activeChannel.id
+    );
+    if (
+      isConnectedToActiveVoice &&
+      currentUser &&
+      !list.some((vs) => vs.user_id === currentUser.id)
+    ) {
+      list.push({
+        guild_id: activeChannel.id,
+        channel_id: activeChannel.id,
+        user_id: currentUser.id,
+        self_mute: isVoiceMuted,
+        self_deaf: isVoiceDeafened,
+      });
+    }
+    return list;
+  }, [
+    isVoiceChannel,
+    activeChannel,
+    voiceStates,
+    isConnectedToActiveVoice,
+    currentUser,
+    isVoiceMuted,
+    isVoiceDeafened,
+  ]);
+
+  const renderVoiceStage = () => (
+    <div className="flex-1 flex flex-col min-w-0 h-full bg-[#0a0c10]/95 relative overflow-hidden">
+      {/* Voice Participants Grid */}
+      <div className="flex-1 p-6 flex flex-col items-center justify-center overflow-y-auto">
+        {currentChannelVoiceStates.length === 0 ? (
+          <div className="flex flex-col items-center justify-center text-center max-w-sm space-y-4">
+            <div className="w-20 h-20 rounded-full bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 shadow-[0_0_30px_rgba(16,185,129,0.15)]">
+              <Volume2 className="w-10 h-10" />
+            </div>
+            <div>
+              <h3 className="text-lg font-semibold text-white">Voice Channel Empty</h3>
+              <p className="text-xs text-white/50 mt-1">
+                Hop into this voice channel to talk and hang out with others.
+              </p>
+            </div>
+            <button
+              onClick={() => onJoinVoice?.(activeChannel!)}
+              className="px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-sm flex items-center gap-2 shadow-lg shadow-emerald-950 transition-all cursor-pointer"
+            >
+              <Phone className="w-4 h-4" />
+              <span>Join Voice</span>
+            </button>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 w-full max-w-5xl justify-items-center">
+            {currentChannelVoiceStates.map((vs) => {
+              const isMe = currentUser && vs.user_id === currentUser.id;
+              const member = vs.member || guildMembers.find((m) => m.user.id === vs.user_id);
+              const displayName =
+                member?.nick ||
+                member?.user?.global_name ||
+                member?.user?.username ||
+                (isMe ? currentUser.global_name || currentUser.username : "User");
+
+              const avatarHash = member?.user?.avatar || (isMe ? currentUser?.avatar : null);
+              const avatarUrl = avatarHash
+                ? `https://cdn.discordapp.com/avatars/${vs.user_id}/${avatarHash}.png?size=128`
+                : null;
+
+              const isMuted = vs.self_mute || vs.mute;
+              const isDeaf = vs.self_deaf || vs.deaf;
+
+              return (
+                <div
+                  key={vs.user_id}
+                  className="w-full aspect-[4/3] rounded-2xl bg-[#141620]/90 border border-white/5 hover:border-white/10 flex flex-col items-center justify-center relative p-4 transition-all shadow-xl group overflow-hidden"
+                >
+                  {/* Avatar with speaking ring */}
+                  <div className="relative">
+                    <div
+                      className={`w-20 h-20 rounded-full overflow-hidden bg-white/10 flex items-center justify-center transition-all ${
+                        !isMuted
+                          ? "ring-4 ring-emerald-500/80 shadow-[0_0_20px_rgba(16,185,129,0.35)]"
+                          : ""
+                      }`}
+                    >
+                      {avatarUrl ? (
+                        <img
+                          src={avatarUrl}
+                          alt={displayName}
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        <span className="text-2xl font-bold text-white">
+                          {displayName[0]?.toUpperCase() || "U"}
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Audio Status Badge */}
+                    {(isMuted || isDeaf) && (
+                      <div className="absolute -bottom-1 -right-1 p-1 rounded-full bg-red-600 text-white shadow-md">
+                        {isMuted ? <MicOff className="w-3.5 h-3.5" /> : <Headphones className="w-3.5 h-3.5" />}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* User Tag */}
+                  <div className="mt-3 px-3 py-1 rounded-lg bg-black/40 backdrop-blur-md flex items-center gap-1.5 max-w-[85%]">
+                    <span
+                      className={`text-xs font-medium truncate ${
+                        isMe ? "text-[var(--accent)] font-semibold" : "text-white"
+                      }`}
+                    >
+                      {displayName}
+                    </span>
+                    {isMe && (
+                      <span className="text-[10px] text-white/50 font-mono">(you)</span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Voice Bottom Control Dock */}
+      <div className="h-16 px-6 bg-[#0e1017]/90 border-t border-white/5 flex items-center justify-center gap-3 backdrop-blur-md shrink-0">
+        {isConnectedToActiveVoice ? (
+          <>
+            <button
+              onClick={onToggleVoiceMute}
+              className={`p-3 rounded-full transition-all cursor-pointer ${
+                isVoiceMuted
+                  ? "bg-red-500/20 text-red-400 hover:bg-red-500/30"
+                  : "bg-white/10 text-white hover:bg-white/20"
+              }`}
+              title={isVoiceMuted ? "Unmute Mic" : "Mute Mic"}
+            >
+              {isVoiceMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+            </button>
+
+            <button
+              onClick={onToggleVoiceDeafen}
+              className={`p-3 rounded-full transition-all cursor-pointer ${
+                isVoiceDeafened
+                  ? "bg-red-500/20 text-red-400 hover:bg-red-500/30"
+                  : "bg-white/10 text-white hover:bg-white/20"
+              }`}
+              title={isVoiceDeafened ? "Undeafen" : "Deafen"}
+            >
+              <Headphones className="w-5 h-5" />
+            </button>
+
+            <button
+              onClick={() => setShowVoiceChat(!showVoiceChat)}
+              className={`p-3 rounded-full transition-all cursor-pointer ${
+                showVoiceChat
+                  ? "bg-[var(--accent-dim)] text-[var(--accent)]"
+                  : "bg-white/10 text-white hover:bg-white/20"
+              }`}
+              title={showVoiceChat ? "Hide Text Chat" : "Show Text Chat"}
+            >
+              <MessageSquare className="w-5 h-5" />
+            </button>
+
+            <button
+              onClick={onDisconnectVoice}
+              className="p-3 rounded-full bg-red-600 hover:bg-red-500 text-white shadow-lg shadow-red-950 transition-all cursor-pointer"
+              title="Disconnect"
+            >
+              <PhoneOff className="w-5 h-5" />
+            </button>
+          </>
+        ) : (
+          <button
+            onClick={() => onJoinVoice?.(activeChannel!)}
+            className="px-6 py-2.5 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-sm flex items-center gap-2 shadow-lg shadow-emerald-950 transition-all cursor-pointer"
+          >
+            <Phone className="w-4 h-4" />
+            <span>Join Voice</span>
+          </button>
+        )}
+      </div>
+    </div>
+  );
 
   return (
     <main
@@ -495,6 +710,19 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 </div>
               )}
             </div>
+          ) : isVoiceChannel ? (
+            <div className="flex items-center gap-2 overflow-hidden">
+              <Volume2 className="w-4 h-4 text-emerald-400 shrink-0" />
+              <span className="font-semibold text-white truncate">
+                {activeChannel?.name}
+              </span>
+              {isConnectedToActiveVoice && (
+                <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 text-[11px] font-mono shrink-0">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  <span>RTC Connected</span>
+                </div>
+              )}
+            </div>
           ) : (
             <>
               <Hash className="w-4 h-4 text-slate-400 shrink-0" />
@@ -515,7 +743,41 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
         {/* Right Header: Call Controls & Member List Toggle */}
         <div className="flex items-center gap-1">
-          {activeChannel && (
+          {isVoiceChannel ? (
+            <div className="flex items-center gap-1 text-slate-300">
+              <button
+                onClick={() => setShowVoiceChat(!showVoiceChat)}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
+                  showVoiceChat
+                    ? "bg-[var(--accent-dim)] text-[var(--accent)]"
+                    : "hover:bg-white/10 hover:text-white text-slate-300"
+                }`}
+                title="Toggle Text Chat"
+              >
+                <MessageSquare className="w-3.5 h-3.5" />
+                <span>Text Chat</span>
+              </button>
+
+              {isConnectedToActiveVoice ? (
+                <button
+                  onClick={onDisconnectVoice}
+                  className="p-1.5 rounded-lg bg-red-500/20 text-red-400 hover:bg-red-500/30 transition-colors cursor-pointer ml-1"
+                  title="Disconnect"
+                >
+                  <PhoneOff className="w-4 h-4" />
+                </button>
+              ) : (
+                <button
+                  onClick={() => onJoinVoice?.(activeChannel!)}
+                  className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium transition-colors cursor-pointer ml-1"
+                  title="Join Voice Channel"
+                >
+                  <Phone className="w-3.5 h-3.5" />
+                  <span>Join</span>
+                </button>
+              )}
+            </div>
+          ) : activeChannel && (
             <>
               {isInCall ? (
                 /* Active In-Call Capsule */
@@ -570,7 +832,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           )}
 
           {/* Member List Toggle Button (for server channels) */}
-          {!isDM && activeChannel && onToggleMemberList && (
+          {!isDM && !isVoiceChannel && activeChannel && onToggleMemberList && (
             <button
               onClick={onToggleMemberList}
               className={`p-1.5 rounded-lg transition-colors cursor-pointer ml-1 ${
@@ -586,8 +848,18 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         </div>
       </div>
 
-      {/* Messages Feed */}
-      <div className="flex-1 overflow-y-auto px-4 py-2">
+      {/* Main Channel Body */}
+      <div className="flex-1 flex min-h-0 overflow-hidden">
+        {isVoiceChannel && renderVoiceStage()}
+
+        {(!isVoiceChannel || showVoiceChat) && (
+          <div
+            className={`${
+              isVoiceChannel ? "w-80 md:w-96 border-l border-white/5" : "flex-1"
+            } flex flex-col min-w-0 h-full overflow-hidden relative`}
+          >
+            {/* Messages Feed */}
+            <div className="flex-1 overflow-y-auto px-4 py-2">
         {isLoading ? (
           <div className="h-full flex items-center justify-center text-white/40 text-sm">
             Loading messages...
@@ -1097,6 +1369,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           </button>
         </form>
       </div>
+    </div>
+  )}
+</div>
 
       {/* Image Preview Lightbox */}
       {previewImage && (

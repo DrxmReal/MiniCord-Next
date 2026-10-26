@@ -13,6 +13,7 @@ import {
   User,
   Users,
   Copy,
+  PhoneOff,
 } from "lucide-react";
 import {
   DiscordChannel,
@@ -20,6 +21,8 @@ import {
   DiscordUser,
   DiscordDMChannel,
   UserPresence,
+  DiscordVoiceState,
+  DiscordMember,
 } from "../types";
 import { StatusBadge } from "./StatusBadge";
 import { ContextMenu, ContextMenuItem } from "./ContextMenu";
@@ -35,6 +38,19 @@ interface ChannelSidebarProps {
   presences?: Record<string, UserPresence>;
   isFriendsTabActive?: boolean;
   onSelectFriendsTab?: () => void;
+  voiceStates?: Record<string, DiscordVoiceState>;
+  connectedVoice?: {
+    guildId: string | null;
+    channelId: string;
+    channelName: string;
+  } | null;
+  onJoinVoice?: (channel: DiscordChannel) => void;
+  onDisconnectVoice?: () => void;
+  isVoiceMuted?: boolean;
+  isVoiceDeafened?: boolean;
+  onToggleVoiceMute?: () => void;
+  onToggleVoiceDeafen?: () => void;
+  guildMembers?: DiscordMember[];
 }
 
 // Compare Discord Snowflakes descending (newest timestamp first)
@@ -64,10 +80,22 @@ export const ChannelSidebar: React.FC<ChannelSidebarProps> = ({
   presences = {},
   isFriendsTabActive = false,
   onSelectFriendsTab,
+  voiceStates = {},
+  connectedVoice = null,
+  onJoinVoice,
+  onDisconnectVoice,
+  isVoiceMuted = false,
+  isVoiceDeafened = false,
+  onToggleVoiceMute,
+  onToggleVoiceDeafen,
+  guildMembers = [],
 }) => {
-  const [isMuted, setIsMuted] = useState(false);
-  const [isDeafened, setIsDeafened] = useState(false);
+  const [localMuted, setLocalMuted] = useState(false);
+  const [localDeafened, setLocalDeafened] = useState(false);
   const [collapsedCategories, setCollapsedCategories] = useState<Record<string, boolean>>({});
+
+  const effectiveMuted = isVoiceMuted ?? localMuted;
+  const effectiveDeafened = isVoiceDeafened ?? localDeafened;
 
   // Context Menu state
   const [contextMenu, setContextMenu] = useState<{
@@ -161,44 +189,116 @@ export const ChannelSidebar: React.FC<ChannelSidebarProps> = ({
     const isVoice = channel.type === 2;
     const isAnnouncement = channel.type === 5;
     const isForum = channel.type === 15;
+    const isConnectedToThisVoice = connectedVoice?.channelId === channel.id;
+
+    // Connected participants for this voice channel
+    const channelVoiceStates = isVoice
+      ? Object.values(voiceStates).filter((vs) => vs.channel_id === channel.id)
+      : [];
 
     return (
-      <button
-        key={channel.id}
-        onClick={() => onSelectChannel(channel)}
-        className={`w-full px-2.5 py-1.5 rounded-lg flex items-center gap-2 text-sm transition-all cursor-pointer select-none group ${
-          isActive
-            ? "bg-[var(--accent-dim)] text-[var(--accent)] font-medium"
-            : "text-slate-300 hover:bg-white/5 hover:text-white"
-        }`}
-      >
-        {isVoice ? (
-          <Volume2
-            className={`w-4 h-4 shrink-0 ${
-              isActive ? "text-[var(--accent)]" : "text-slate-400 group-hover:text-slate-300"
-            }`}
-          />
-        ) : isAnnouncement ? (
-          <Megaphone
-            className={`w-4 h-4 shrink-0 ${
-              isActive ? "text-[var(--accent)]" : "text-slate-400 group-hover:text-slate-300"
-            }`}
-          />
-        ) : isForum ? (
-          <MessageSquare
-            className={`w-4 h-4 shrink-0 ${
-              isActive ? "text-[var(--accent)]" : "text-slate-400 group-hover:text-slate-300"
-            }`}
-          />
-        ) : (
-          <Hash
-            className={`w-4 h-4 shrink-0 ${
-              isActive ? "text-[var(--accent)]" : "text-slate-400 group-hover:text-slate-300"
-            }`}
-          />
+      <div key={channel.id} className="space-y-0.5">
+        <button
+          onClick={() => {
+            onSelectChannel(channel);
+            if (isVoice && onJoinVoice) {
+              onJoinVoice(channel);
+            }
+          }}
+          className={`w-full px-2.5 py-1.5 rounded-lg flex items-center justify-between text-sm transition-all cursor-pointer select-none group ${
+            isActive || isConnectedToThisVoice
+              ? "bg-[var(--accent-dim)] text-[var(--accent)] font-medium"
+              : "text-slate-300 hover:bg-white/5 hover:text-white"
+          }`}
+        >
+          <div className="flex items-center gap-2 min-w-0 overflow-hidden">
+            {isVoice ? (
+              <Volume2
+                className={`w-4 h-4 shrink-0 ${
+                  isActive || isConnectedToThisVoice
+                    ? "text-[var(--accent)]"
+                    : "text-slate-400 group-hover:text-slate-300"
+                }`}
+              />
+            ) : isAnnouncement ? (
+              <Megaphone
+                className={`w-4 h-4 shrink-0 ${
+                  isActive ? "text-[var(--accent)]" : "text-slate-400 group-hover:text-slate-300"
+                }`}
+              />
+            ) : isForum ? (
+              <MessageSquare
+                className={`w-4 h-4 shrink-0 ${
+                  isActive ? "text-[var(--accent)]" : "text-slate-400 group-hover:text-slate-300"
+                }`}
+              />
+            ) : (
+              <Hash
+                className={`w-4 h-4 shrink-0 ${
+                  isActive ? "text-[var(--accent)]" : "text-slate-400 group-hover:text-slate-300"
+                }`}
+              />
+            )}
+            <span className="truncate">{channel.name}</span>
+          </div>
+
+          {isVoice && channelVoiceStates.length > 0 && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-white/10 text-white/70 font-mono shrink-0">
+              {channelVoiceStates.length}
+            </span>
+          )}
+        </button>
+
+        {/* Live Voice Participants list under Voice Channel */}
+        {isVoice && channelVoiceStates.length > 0 && (
+          <div className="pl-6 pr-1 py-0.5 space-y-0.5">
+            {channelVoiceStates.map((vs) => {
+              const isMe = currentUser && vs.user_id === currentUser.id;
+              const member = vs.member || guildMembers.find((m) => m.user.id === vs.user_id);
+              const displayName =
+                member?.nick ||
+                member?.user?.global_name ||
+                member?.user?.username ||
+                (isMe ? currentUser.global_name || currentUser.username : "User");
+
+              const avatarHash = member?.user?.avatar || (isMe ? currentUser?.avatar : null);
+              const avatarUrl = avatarHash
+                ? `https://cdn.discordapp.com/avatars/${vs.user_id}/${avatarHash}.png?size=64`
+                : null;
+
+              const isMutedUser = vs.self_mute || vs.mute;
+              const isDeafUser = vs.self_deaf || vs.deaf;
+
+              return (
+                <div
+                  key={vs.user_id}
+                  className={`flex items-center justify-between px-2 py-1 rounded-md text-xs group/voice-user hover:bg-white/5 transition-colors ${
+                    isMe ? "text-[var(--accent)] font-medium" : "text-slate-300"
+                  }`}
+                >
+                  <div className="flex items-center gap-2 min-w-0 overflow-hidden">
+                    <div className="w-5 h-5 rounded-full overflow-hidden bg-white/10 flex items-center justify-center shrink-0">
+                      {avatarUrl ? (
+                        <img src={avatarUrl} alt={displayName} className="w-full h-full object-cover" />
+                      ) : (
+                        <span className="text-[10px] font-bold">
+                          {displayName[0]?.toUpperCase() || "U"}
+                        </span>
+                      )}
+                    </div>
+                    <span className="truncate text-xs">{displayName}</span>
+                  </div>
+
+                  <div className="flex items-center gap-1 shrink-0 text-white/50">
+                    {isMutedUser && <MicOff className="w-3 h-3 text-red-400" />}
+                    {isDeafUser && <Headphones className="w-3 h-3 text-red-400" />}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         )}
-        <span className="truncate">{channel.name}</span>
-      </button>
+      </div>
     );
   };
 
@@ -375,6 +475,33 @@ export const ChannelSidebar: React.FC<ChannelSidebarProps> = ({
         )}
       </div>
 
+      {/* Voice Connected Status Widget */}
+      {connectedVoice && (
+        <div className="px-3 py-2 border-t border-white/5 bg-emerald-950/40 border-l-2 border-l-emerald-500 backdrop-blur-md flex items-center justify-between">
+          <div className="flex items-center gap-2 min-w-0 overflow-hidden">
+            <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+            <div className="min-w-0 overflow-hidden">
+              <div className="text-[11px] font-bold text-emerald-400 truncate tracking-wide flex items-center gap-1.5">
+                <span>Voice Connected</span>
+                <span className="text-[9px] px-1 py-0.2 rounded bg-emerald-500/20 text-emerald-300 font-mono font-normal">
+                  RTC
+                </span>
+              </div>
+              <div className="text-[10px] text-white/70 truncate font-medium">
+                {connectedVoice.channelName}
+              </div>
+            </div>
+          </div>
+          <button
+            onClick={() => onDisconnectVoice?.()}
+            className="p-1.5 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500/20 hover:text-red-300 transition-colors cursor-pointer shrink-0"
+            title="Disconnect Voice"
+          >
+            <PhoneOff className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
       {/* Bottom User Profile Capsule */}
       <div className="p-2 border-t border-white/5 bg-[var(--bg-deep)]/40">
         <div className="flex items-center justify-between p-1.5 rounded-xl bg-white/5 backdrop-blur-md">
@@ -403,20 +530,26 @@ export const ChannelSidebar: React.FC<ChannelSidebarProps> = ({
 
           <div className="flex items-center gap-0.5 text-slate-400">
             <button
-              onClick={() => setIsMuted(!isMuted)}
+              onClick={() => {
+                if (onToggleVoiceMute) onToggleVoiceMute();
+                else setLocalMuted(!localMuted);
+              }}
               className={`p-1.5 rounded-md hover:bg-white/10 hover:text-white transition-colors cursor-pointer ${
-                isMuted ? "text-red-400" : ""
+                effectiveMuted ? "text-red-400 bg-red-500/15" : ""
               }`}
-              title={isMuted ? "Unmute" : "Mute"}
+              title={effectiveMuted ? "Unmute" : "Mute"}
             >
-              {isMuted ? <MicOff className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5" />}
+              {effectiveMuted ? <MicOff className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5" />}
             </button>
             <button
-              onClick={() => setIsDeafened(!isDeafened)}
+              onClick={() => {
+                if (onToggleVoiceDeafen) onToggleVoiceDeafen();
+                else setLocalDeafened(!localDeafened);
+              }}
               className={`p-1.5 rounded-md hover:bg-white/10 hover:text-white transition-colors cursor-pointer ${
-                isDeafened ? "text-red-400" : ""
+                effectiveDeafened ? "text-red-400 bg-red-500/15" : ""
               }`}
-              title={isDeafened ? "Undeafen" : "Deafen"}
+              title={effectiveDeafened ? "Undeafen" : "Deafen"}
             >
               <Headphones className="w-3.5 h-3.5" />
             </button>
