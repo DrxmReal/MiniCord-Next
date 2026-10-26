@@ -34,6 +34,9 @@ pub struct VoiceState {
 
 pub type PresenceMap = Arc<RwLock<HashMap<String, UserPresence>>>;
 pub type VoiceStateMap = Arc<RwLock<HashMap<String, HashMap<String, VoiceState>>>>; // guild_id -> (user_id -> VoiceState)
+pub type MemberMap = Arc<RwLock<HashMap<String, HashMap<String, Value>>>>; // guild_id -> (user_id -> Member)
+pub type EmojiMap = Arc<RwLock<HashMap<String, Vec<Value>>>>; // guild_id -> [Emoji]
+pub type StickerMap = Arc<RwLock<HashMap<String, Vec<Value>>>>; // guild_id -> [Sticker]
 
 pub enum GatewayCommand {
     UpdateVoiceState {
@@ -42,11 +45,18 @@ pub enum GatewayCommand {
         self_mute: bool,
         self_deaf: bool,
     },
+    SubscribeGuildMembers {
+        guild_id: String,
+        channel_id: String,
+    },
 }
 
 pub struct GatewayState {
     pub presences: PresenceMap,
     pub voice_states: VoiceStateMap,
+    pub guild_members: MemberMap,
+    pub guild_emojis: EmojiMap,
+    pub guild_stickers: StickerMap,
     pub active_token: Arc<RwLock<Option<String>>>,
     pub cmd_tx: Arc<RwLock<Option<tokio::sync::mpsc::Sender<GatewayCommand>>>>,
 }
@@ -56,6 +66,9 @@ impl GatewayState {
         Self {
             presences: Arc::new(RwLock::new(HashMap::new())),
             voice_states: Arc::new(RwLock::new(HashMap::new())),
+            guild_members: Arc::new(RwLock::new(HashMap::new())),
+            guild_emojis: Arc::new(RwLock::new(HashMap::new())),
+            guild_stickers: Arc::new(RwLock::new(HashMap::new())),
             active_token: Arc::new(RwLock::new(None)),
             cmd_tx: Arc::new(RwLock::new(None)),
         }
@@ -211,6 +224,32 @@ pub fn spawn_gateway_session(app: AppHandle, token: String, state: Arc<GatewaySt
                                         println!("[Gateway] Transmitting Opcode 4 (VoiceStateUpdate): {}", msg);
                                         let _ = write.send(Message::Text(msg.to_string().into())).await;
                                     }
+                                    GatewayCommand::SubscribeGuildMembers { guild_id, channel_id } => {
+                                        let op14 = json!({
+                                            "op": 14,
+                                            "d": {
+                                                "guild_id": guild_id.clone(),
+                                                "typing": true,
+                                                "threads": true,
+                                                "activities": true,
+                                                "members": [],
+                                                "channels": {
+                                                    channel_id: [[0, 99]]
+                                                }
+                                            }
+                                        });
+                                        let _ = write.send(Message::Text(op14.to_string().into())).await;
+
+                                        let op8 = json!({
+                                            "op": 8,
+                                            "d": {
+                                                "guild_id": guild_id,
+                                                "query": "",
+                                                "limit": 0
+                                            }
+                                        });
+                                        let _ = write.send(Message::Text(op8.to_string().into())).await;
+                                    }
                                 }
                             }
                             _ = rx_hb.recv() => {
@@ -279,28 +318,95 @@ pub fn spawn_gateway_session(app: AppHandle, token: String, state: Arc<GatewaySt
                                                         let _ = app.emit("gateway-presence-update", &presence);
                                                     }
                                                 } else if event_name == "GUILD_CREATE" {
-                                                    if let (Some(gid), Some(v_states)) = (v["d"]["id"].as_str(), v["d"]["voice_states"].as_array()) {
-                                                        let mut vs_map = state.voice_states.write().await;
-                                                        let guild_map = vs_map.entry(gid.to_string()).or_insert_with(HashMap::new);
-                                                        for d in v_states {
-                                                            if let (Some(uid), Some(cid)) = (d["user_id"].as_str(), d["channel_id"].as_str()) {
-                                                                guild_map.insert(uid.to_string(), VoiceState {
-                                                                    guild_id: Some(gid.to_string()),
-                                                                    channel_id: Some(cid.to_string()),
-                                                                    user_id: uid.to_string(),
-                                                                    session_id: d["session_id"].as_str().unwrap_or("").to_string(),
-                                                                    deaf: d["deaf"].as_bool().unwrap_or(false),
-                                                                    mute: d["mute"].as_bool().unwrap_or(false),
-                                                                    self_deaf: d["self_deaf"].as_bool().unwrap_or(false),
-                                                                    self_mute: d["self_mute"].as_bool().unwrap_or(false),
-                                                                    self_video: d["self_video"].as_bool().unwrap_or(false),
-                                                                    suppress: d["suppress"].as_bool().unwrap_or(false),
-                                                                    member: d.get("member").cloned(),
-                                                                });
+                                                    if let Some(gid) = v["d"]["id"].as_str() {
+                                                        // 1. Members
+                                                        if let Some(m_arr) = v["d"]["members"].as_array() {
+                                                            let mut gm_lock = state.guild_members.write().await;
+                                                            let g_members = gm_lock.entry(gid.to_string()).or_insert_with(HashMap::new);
+                                                            for m in m_arr {
+                                                                if let Some(uid) = m["user"]["id"].as_str() {
+                                                                    g_members.insert(uid.to_string(), m.clone());
+                                                                }
+                                                            }
+                                                            let all: Vec<Value> = g_members.values().cloned().collect();
+                                                            let _ = app.emit("gateway-guild-members-chunk", json!({ "guild_id": gid, "members": all }));
+                                                        }
+
+                                                        // 2. Emojis
+                                                        if let Some(emojis) = v["d"]["emojis"].as_array() {
+                                                            let mut ge_lock = state.guild_emojis.write().await;
+                                                            ge_lock.insert(gid.to_string(), emojis.clone());
+                                                            let _ = app.emit("gateway-guild-emojis-update", json!({ "guild_id": gid, "emojis": emojis }));
+                                                        }
+
+                                                        // 3. Stickers
+                                                        if let Some(stickers) = v["d"]["stickers"].as_array() {
+                                                            let mut gs_lock = state.guild_stickers.write().await;
+                                                            gs_lock.insert(gid.to_string(), stickers.clone());
+                                                            let _ = app.emit("gateway-guild-stickers-update", json!({ "guild_id": gid, "stickers": stickers }));
+                                                        }
+
+                                                        // 4. Voice states
+                                                        if let Some(v_states) = v["d"]["voice_states"].as_array() {
+                                                            let mut vs_map = state.voice_states.write().await;
+                                                            let guild_map = vs_map.entry(gid.to_string()).or_insert_with(HashMap::new);
+                                                            for d in v_states {
+                                                                if let (Some(uid), Some(cid)) = (d["user_id"].as_str(), d["channel_id"].as_str()) {
+                                                                    guild_map.insert(uid.to_string(), VoiceState {
+                                                                        guild_id: Some(gid.to_string()),
+                                                                        channel_id: Some(cid.to_string()),
+                                                                        user_id: uid.to_string(),
+                                                                        session_id: d["session_id"].as_str().unwrap_or("").to_string(),
+                                                                        deaf: d["deaf"].as_bool().unwrap_or(false),
+                                                                        mute: d["mute"].as_bool().unwrap_or(false),
+                                                                        self_deaf: d["self_deaf"].as_bool().unwrap_or(false),
+                                                                        self_mute: d["self_mute"].as_bool().unwrap_or(false),
+                                                                        self_video: d["self_video"].as_bool().unwrap_or(false),
+                                                                        suppress: d["suppress"].as_bool().unwrap_or(false),
+                                                                        member: d.get("member").cloned(),
+                                                                    });
+                                                                }
+                                                            }
+                                                            let all: Vec<VoiceState> = guild_map.values().cloned().collect();
+                                                            let _ = app.emit("gateway-guild-voice-states", json!({ "guild_id": gid, "voice_states": all }));
+                                                        }
+                                                    }
+                                                } else if event_name == "GUILD_MEMBERS_CHUNK" {
+                                                    if let (Some(gid), Some(m_arr)) = (v["d"]["guild_id"].as_str(), v["d"]["members"].as_array()) {
+                                                        let mut gm_lock = state.guild_members.write().await;
+                                                        let g_members = gm_lock.entry(gid.to_string()).or_insert_with(HashMap::new);
+                                                        for m in m_arr {
+                                                            if let Some(uid) = m["user"]["id"].as_str() {
+                                                                g_members.insert(uid.to_string(), m.clone());
                                                             }
                                                         }
-                                                        let all: Vec<VoiceState> = guild_map.values().cloned().collect();
-                                                        let _ = app.emit("gateway-guild-voice-states", json!({ "guild_id": gid, "voice_states": all }));
+                                                        let all: Vec<Value> = g_members.values().cloned().collect();
+                                                        let _ = app.emit("gateway-guild-members-chunk", json!({ "guild_id": gid, "members": all }));
+                                                    }
+                                                } else if event_name == "GUILD_MEMBER_LIST_UPDATE" {
+                                                    if let (Some(gid), Some(ops)) = (v["d"]["guild_id"].as_str(), v["d"]["ops"].as_array()) {
+                                                        let mut gm_lock = state.guild_members.write().await;
+                                                        let g_members = gm_lock.entry(gid.to_string()).or_insert_with(HashMap::new);
+                                                        for op in ops {
+                                                            if let Some(items) = op.get("items").and_then(|i| i.as_array()) {
+                                                                for item in items {
+                                                                    if let Some(member) = item.get("member") {
+                                                                        if let Some(uid) = member["user"]["id"].as_str() {
+                                                                            g_members.insert(uid.to_string(), member.clone());
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                            if let Some(item) = op.get("item") {
+                                                                if let Some(member) = item.get("member") {
+                                                                    if let Some(uid) = member["user"]["id"].as_str() {
+                                                                        g_members.insert(uid.to_string(), member.clone());
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                        let all: Vec<Value> = g_members.values().cloned().collect();
+                                                        let _ = app.emit("gateway-guild-members-chunk", json!({ "guild_id": gid, "members": all }));
                                                     }
                                                 } else if event_name == "VOICE_STATE_UPDATE" {
                                                     let d = &v["d"];
@@ -329,6 +435,15 @@ pub fn spawn_gateway_session(app: AppHandle, token: String, state: Arc<GatewaySt
                                                 } else if event_name == "VOICE_SERVER_UPDATE" {
                                                     let _ = app.emit("gateway-voice-server-update", &v["d"]);
                                                 } else if event_name == "MESSAGE_CREATE" {
+                                                    if let (Some(gid), Some(member)) = (v["d"]["guild_id"].as_str(), v["d"].get("member")) {
+                                                        if let Some(uid) = v["d"]["author"]["id"].as_str() {
+                                                            let mut full_member = member.clone();
+                                                            full_member["user"] = v["d"]["author"].clone();
+                                                            let mut gm_lock = state.guild_members.write().await;
+                                                            let g_members = gm_lock.entry(gid.to_string()).or_insert_with(HashMap::new);
+                                                            g_members.insert(uid.to_string(), full_member);
+                                                        }
+                                                    }
                                                     let _ = app.emit("gateway-message-create", &v["d"]);
                                                 } else if event_name == "TYPING_START" {
                                                     let _ = app.emit("gateway-typing-start", &v["d"]);

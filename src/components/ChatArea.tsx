@@ -31,6 +31,7 @@ import {
   DiscordMember,
   MentionContext,
   DiscordVoiceState,
+  DiscordGuild,
 } from "../types";
 import { EmbedCard, formatMarkdownText } from "./EmbedCard";
 import { EmojiGifPicker } from "./EmojiGifPicker";
@@ -79,6 +80,7 @@ interface ChatAreaProps {
   isVoiceDeafened?: boolean;
   onToggleVoiceMute?: () => void;
   onToggleVoiceDeafen?: () => void;
+  activeGuild?: DiscordGuild | null;
 }
 
 export const ChatArea: React.FC<ChatAreaProps> = ({
@@ -106,6 +108,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   isVoiceDeafened = false,
   onToggleVoiceMute,
   onToggleVoiceDeafen,
+  activeGuild = null,
 }) => {
   const [inputText, setInputText] = useState("");
   const [selectedFile, setSelectedFile] = useState<{
@@ -1261,6 +1264,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             onSelectEmoji={handleSelectEmoji}
             onSelectGif={handleSelectGif}
             onClose={() => setShowPicker(false)}
+            guildId={activeGuild?.id}
+            guildName={activeGuild?.name}
           />
         )}
 

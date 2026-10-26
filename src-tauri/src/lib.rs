@@ -5,6 +5,7 @@ mod discord_http;
 mod discord_gateway;
 
 use std::sync::Arc;
+use std::collections::HashMap;
 use tauri::{AppHandle, State};
 use discord_http::DiscordState;
 use discord_gateway::{GatewayState, UserPresence};
@@ -117,8 +118,99 @@ async fn get_guild_members(
     guild_id: String,
     limit: Option<u32>,
     state: State<'_, DiscordState>,
+    gw_state: State<'_, Arc<GatewayState>>,
 ) -> Result<Vec<serde_json::Value>, String> {
+    // 1. Try search endpoint
+    if let Ok(members) = state.search_guild_members(&guild_id, "").await {
+        if !members.is_empty() {
+            let mut gm_lock = gw_state.guild_members.write().await;
+            let g_members = gm_lock.entry(guild_id.clone()).or_insert_with(HashMap::new);
+            for m in &members {
+                if let Some(uid) = m["user"]["id"].as_str() {
+                    g_members.insert(uid.to_string(), m.clone());
+                }
+            }
+            return Ok(members);
+        }
+    }
+
+    // 2. Gateway cached members (from GUILD_CREATE, Opcode 14, Opcode 8)
+    {
+        let gm_lock = gw_state.guild_members.read().await;
+        if let Some(g_members) = gm_lock.get(&guild_id) {
+            if !g_members.is_empty() {
+                return Ok(g_members.values().cloned().collect());
+            }
+        }
+    }
+
+    // 3. Fallback to standard
     state.get_guild_members(&guild_id, limit).await
+}
+
+#[tauri::command]
+async fn subscribe_guild_members(
+    guild_id: String,
+    channel_id: String,
+    gw_state: State<'_, Arc<GatewayState>>,
+) -> Result<bool, String> {
+    let tx_lock = gw_state.cmd_tx.read().await;
+    if let Some(tx) = tx_lock.as_ref() {
+        let _ = tx.send(discord_gateway::GatewayCommand::SubscribeGuildMembers {
+            guild_id,
+            channel_id,
+        }).await;
+    }
+    Ok(true)
+}
+
+#[tauri::command]
+async fn get_guild_emojis(
+    guild_id: String,
+    state: State<'_, DiscordState>,
+    gw_state: State<'_, Arc<GatewayState>>,
+) -> Result<Vec<serde_json::Value>, String> {
+    {
+        let ge_lock = gw_state.guild_emojis.read().await;
+        if let Some(list) = ge_lock.get(&guild_id) {
+            if !list.is_empty() {
+                return Ok(list.clone());
+            }
+        }
+    }
+    state.get_guild_emojis(&guild_id).await
+}
+
+#[tauri::command]
+async fn get_guild_stickers(
+    guild_id: String,
+    state: State<'_, DiscordState>,
+    gw_state: State<'_, Arc<GatewayState>>,
+) -> Result<Vec<serde_json::Value>, String> {
+    {
+        let gs_lock = gw_state.guild_stickers.read().await;
+        if let Some(list) = gs_lock.get(&guild_id) {
+            if !list.is_empty() {
+                return Ok(list.clone());
+            }
+        }
+    }
+    state.get_guild_stickers(&guild_id).await
+}
+
+#[tauri::command]
+async fn get_sticker_packs(
+    state: State<'_, DiscordState>,
+) -> Result<Vec<serde_json::Value>, String> {
+    state.get_sticker_packs().await
+}
+
+#[tauri::command]
+async fn search_gifs(
+    query: String,
+    state: State<'_, DiscordState>,
+) -> Result<Vec<serde_json::Value>, String> {
+    state.search_gifs(&query).await
 }
 
 #[tauri::command]
@@ -268,7 +360,12 @@ pub fn run() {
             remove_reaction,
             create_dm,
             set_voice_state,
-            get_guild_voice_states
+            get_guild_voice_states,
+            subscribe_guild_members,
+            get_guild_emojis,
+            get_guild_stickers,
+            get_sticker_packs,
+            search_gifs
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

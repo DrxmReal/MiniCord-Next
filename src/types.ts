@@ -92,6 +92,35 @@ export interface DiscordVoiceState {
   member?: DiscordMember | null;
 }
 
+export interface DiscordEmoji {
+  id: string;
+  name: string;
+  roles?: string[];
+  animated?: boolean;
+  require_colons?: boolean;
+  managed?: boolean;
+  available?: boolean;
+}
+
+export interface DiscordSticker {
+  id: string;
+  name: string;
+  description?: string | null;
+  format_type: number; // 1 = PNG, 2 = APNG, 3 = Lottie, 4 = GIF
+  pack_id?: string;
+  tags?: string;
+}
+
+export interface DiscordGif {
+  id?: string;
+  title?: string;
+  url: string;
+  src?: string;
+  preview?: string;
+  width?: number;
+  height?: number;
+}
+
 export interface DiscordGuild {
   id: string;
   name: string;

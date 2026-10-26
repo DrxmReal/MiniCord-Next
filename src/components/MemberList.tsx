@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { Search, Crown, X } from "lucide-react";
 import {
   DiscordGuild,
@@ -16,6 +17,7 @@ interface MemberListProps {
   onSelectUser: (user: DiscordUser, member?: DiscordMember) => void;
   onClose?: () => void;
   initialMembers?: DiscordMember[];
+  activeChannelId?: string | null;
 }
 
 interface MemberGroup {
@@ -31,19 +33,52 @@ export const MemberList: React.FC<MemberListProps> = ({
   onSelectUser,
   onClose,
   initialMembers = [],
+  activeChannelId,
 }) => {
   const [members, setMembers] = useState<DiscordMember[]>(initialMembers);
-
-  useEffect(() => {
-    if (initialMembers.length > 0) {
-      setMembers(initialMembers);
-    }
-  }, [initialMembers]);
   const [roles, setRoles] = useState<DiscordRole[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [isLoading, setIsLoading] = useState(false);
 
-  // Load members and roles on guild change
+  useEffect(() => {
+    if (initialMembers.length > 0) {
+      setMembers((prev) => {
+        const map = new Map(prev.map((m) => [m.user.id, m]));
+        for (const m of initialMembers) {
+          if (m?.user?.id) map.set(m.user.id, m);
+        }
+        return Array.from(map.values());
+      });
+    }
+  }, [initialMembers]);
+
+  // Listen to Gateway Guild Members chunks
+  useEffect(() => {
+    if (!activeGuild) return;
+
+    const unlisten = listen<{ guild_id: string; members: DiscordMember[] }>(
+      "gateway-guild-members-chunk",
+      (event) => {
+        if (event.payload.guild_id === activeGuild.id) {
+          setMembers((prev) => {
+            const map = new Map(prev.map((m) => [m.user.id, m]));
+            for (const m of event.payload.members) {
+              if (m?.user?.id) {
+                map.set(m.user.id, m);
+              }
+            }
+            return Array.from(map.values());
+          });
+        }
+      }
+    );
+
+    return () => {
+      unlisten.then((u) => u());
+    };
+  }, [activeGuild?.id]);
+
+  // Load members, roles and subscribe on active channel / guild change
   useEffect(() => {
     if (!activeGuild) {
       setMembers([]);
@@ -54,6 +89,13 @@ export const MemberList: React.FC<MemberListProps> = ({
     let isMounted = true;
     setIsLoading(true);
 
+    // 1. Subscribe via Gateway Opcode 14 & Opcode 8
+    invoke("subscribe_guild_members", {
+      guildId: activeGuild.id,
+      channelId: activeChannelId || "",
+    }).catch(() => {});
+
+    // 2. Fetch via REST / cache
     Promise.all([
       invoke<DiscordMember[]>("get_guild_members", {
         guildId: activeGuild.id,
@@ -70,7 +112,15 @@ export const MemberList: React.FC<MemberListProps> = ({
       }),
     ]).then(([fetchedMembers, fetchedRoles]) => {
       if (!isMounted) return;
-      setMembers(fetchedMembers);
+      if (fetchedMembers.length > 0) {
+        setMembers((prev) => {
+          const map = new Map(prev.map((m) => [m.user.id, m]));
+          for (const m of fetchedMembers) {
+            if (m?.user?.id) map.set(m.user.id, m);
+          }
+          return Array.from(map.values());
+        });
+      }
       setRoles(fetchedRoles);
       setIsLoading(false);
     });
@@ -78,7 +128,33 @@ export const MemberList: React.FC<MemberListProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [activeGuild?.id]);
+  }, [activeGuild?.id, activeChannelId]);
+
+  // Search members if search query typed
+  useEffect(() => {
+    const q = searchQuery.trim();
+    if (!q || !activeGuild) return;
+
+    const timer = setTimeout(async () => {
+      try {
+        const found = await invoke<DiscordMember[]>("get_guild_members", {
+          guildId: activeGuild.id,
+          limit: 100,
+        });
+        if (found.length > 0) {
+          setMembers((prev) => {
+            const map = new Map(prev.map((m) => [m.user.id, m]));
+            for (const m of found) {
+              if (m?.user?.id) map.set(m.user.id, m);
+            }
+            return Array.from(map.values());
+          });
+        }
+      } catch {}
+    }, 400);
+
+    return () => clearTimeout(timer);
+  }, [searchQuery, activeGuild?.id]);
 
   // Roles map by ID
   const rolesMap = useMemo(() => {

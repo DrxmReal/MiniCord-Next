@@ -981,6 +981,7 @@ export default function App() {
             isVoiceDeafened={isVoiceDeafened}
             onToggleVoiceMute={handleToggleVoiceMute}
             onToggleVoiceDeafen={handleToggleVoiceDeafen}
+            activeGuild={activeGuild}
           />
         )}
 
@@ -988,6 +989,7 @@ export default function App() {
         {activeGuild && activeChannel && isMemberListOpen && (
           <MemberList
             activeGuild={activeGuild}
+            activeChannelId={activeChannel?.id}
             presences={presences}
             initialMembers={guildMembers}
             onSelectUser={(user, member) => {

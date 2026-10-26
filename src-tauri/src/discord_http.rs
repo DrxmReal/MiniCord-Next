@@ -238,12 +238,97 @@ impl DiscordState {
     }
 
     pub async fn get_guild_members(&self, guild_id: &str, limit: Option<u32>) -> Result<Vec<serde_json::Value>, String> {
+        // Try members/search first (user-token compliant)
+        if let Ok(members) = self.search_guild_members(guild_id, "").await {
+            if !members.is_empty() {
+                return Ok(members);
+            }
+        }
+
         let client = self.get_client().await?;
         let lim = limit.unwrap_or(1000).min(1000);
         let url = format!("https://discord.com/api/v10/guilds/{}/members?limit={}", guild_id, lim);
         let resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
         if resp.status().is_success() {
             resp.json::<Vec<serde_json::Value>>().await.map_err(|e| e.to_string())
+        } else {
+            Err(format!("HTTP {}", resp.status()))
+        }
+    }
+
+    pub async fn search_guild_members(&self, guild_id: &str, query: &str) -> Result<Vec<serde_json::Value>, String> {
+        let client = self.get_client().await?;
+        let q = url_encode(query);
+        let url = format!("https://discord.com/api/v10/guilds/{}/members/search?query={}&limit=1000", guild_id, q);
+        let resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
+        if resp.status().is_success() {
+            resp.json::<Vec<serde_json::Value>>().await.map_err(|e| e.to_string())
+        } else {
+            Err(format!("HTTP {}", resp.status()))
+        }
+    }
+
+    pub async fn get_guild_emojis(&self, guild_id: &str) -> Result<Vec<serde_json::Value>, String> {
+        let client = self.get_client().await?;
+        let url = format!("https://discord.com/api/v10/guilds/{}/emojis", guild_id);
+        let resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
+        if resp.status().is_success() {
+            resp.json::<Vec<serde_json::Value>>().await.map_err(|e| e.to_string())
+        } else {
+            Err(format!("HTTP {}", resp.status()))
+        }
+    }
+
+    pub async fn get_guild_stickers(&self, guild_id: &str) -> Result<Vec<serde_json::Value>, String> {
+        let client = self.get_client().await?;
+        let url = format!("https://discord.com/api/v10/guilds/{}/stickers", guild_id);
+        let resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
+        if resp.status().is_success() {
+            resp.json::<Vec<serde_json::Value>>().await.map_err(|e| e.to_string())
+        } else {
+            Err(format!("HTTP {}", resp.status()))
+        }
+    }
+
+    pub async fn get_sticker_packs(&self) -> Result<Vec<serde_json::Value>, String> {
+        let client = self.get_client().await?;
+        let url = "https://discord.com/api/v10/sticker-packs";
+        let resp = client.get(url).send().await.map_err(|e| e.to_string())?;
+        if resp.status().is_success() {
+            let data: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+            if let Some(arr) = data.get("sticker_packs").and_then(|p| p.as_array()) {
+                Ok(arr.clone())
+            } else if let Some(arr) = data.as_array() {
+                Ok(arr.clone())
+            } else {
+                Ok(vec![])
+            }
+        } else {
+            Err(format!("HTTP {}", resp.status()))
+        }
+    }
+
+    pub async fn search_gifs(&self, query: &str) -> Result<Vec<serde_json::Value>, String> {
+        let client = self.get_client().await?;
+        let q = query.trim();
+        let url = if q.is_empty() {
+            "https://discord.com/api/v9/gifs/trending?media_format=gif".to_string()
+        } else {
+            format!("https://discord.com/api/v9/gifs/search?q={}&media_format=gif", url_encode(q))
+        };
+
+        let resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
+        if resp.status().is_success() {
+            let data: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+            if let Some(arr) = data.as_array() {
+                Ok(arr.clone())
+            } else if let Some(arr) = data.get("items").and_then(|i| i.as_array()) {
+                Ok(arr.clone())
+            } else if let Some(arr) = data.get("gifs").and_then(|g| g.as_array()) {
+                Ok(arr.clone())
+            } else {
+                Ok(vec![])
+            }
         } else {
             Err(format!("HTTP {}", resp.status()))
         }
