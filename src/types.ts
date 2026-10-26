@@ -166,11 +166,24 @@ export interface DiscordMessage {
   channel_id: string;
   content: string;
   timestamp: string;
+  edited_timestamp?: string | null;
   author: DiscordUser;
   attachments?: DiscordAttachment[];
   embeds?: DiscordEmbed[];
   reactions?: DiscordReaction[];
   referenced_message?: DiscordMessage | null;
+  mentions?: DiscordUser[];
+  mention_roles?: string[];
+}
+
+export interface MentionContext {
+  mentions?: DiscordUser[];
+  members?: DiscordMember[];
+  roles?: DiscordRole[];
+  channels?: DiscordChannel[];
+  currentUser?: DiscordUser | null;
+  onSelectUser?: (user: DiscordUser) => void;
+  onSelectChannel?: (channel: DiscordChannel) => void;
 }
 
 export interface UserPresence {

@@ -24,6 +24,9 @@ import {
   AppSettings,
   UserPresence,
   DiscordUser,
+  DiscordRole,
+  DiscordMember,
+  MentionContext,
 } from "../types";
 import { EmbedCard, formatMarkdownText } from "./EmbedCard";
 import { EmojiGifPicker } from "./EmojiGifPicker";
@@ -55,6 +58,11 @@ interface ChatAreaProps {
     emoji: string,
     isMe: boolean
   ) => Promise<void>;
+  channels?: DiscordChannel[];
+  guildRoles?: DiscordRole[];
+  guildMembers?: DiscordMember[];
+  currentUser?: DiscordUser | null;
+  onSelectChannel?: (channel: DiscordChannel) => void;
 }
 
 export const ChatArea: React.FC<ChatAreaProps> = ({
@@ -69,6 +77,11 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   onToggleMemberList,
   typingUsers = [],
   onToggleReaction,
+  channels = [],
+  guildRoles = [],
+  guildMembers = [],
+  currentUser = null,
+  onSelectChannel,
 }) => {
   const [inputText, setInputText] = useState("");
   const [selectedFile, setSelectedFile] = useState<{
@@ -93,10 +106,121 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     items: ContextMenuItem[];
   } | null>(null);
 
+  // @ Mention Autocomplete state
+  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
+  const [selectedMentionIndex, setSelectedMentionIndex] = useState(0);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textInputRef = useRef<HTMLInputElement>(null);
   const lastTypingSentRef = useRef<number>(0);
+
+  // Available users for mention autocomplete
+  const mentionSuggestions = React.useMemo(() => {
+    if (mentionQuery === null) return [];
+    const q = mentionQuery.toLowerCase();
+
+    const pool: Array<{
+      id: string;
+      name: string;
+      username: string;
+      avatarUrl?: string | null;
+      presence?: UserPresence;
+    }> = [];
+
+    if (guildMembers && guildMembers.length > 0) {
+      for (const m of guildMembers) {
+        const displayName = m.nick || m.user.global_name || m.user.username;
+        const avatar = m.user.avatar
+          ? `https://cdn.discordapp.com/avatars/${m.user.id}/${m.user.avatar}.png?size=64`
+          : null;
+        pool.push({
+          id: m.user.id,
+          name: displayName,
+          username: m.user.username,
+          avatarUrl: avatar,
+          presence: presences[m.user.id],
+        });
+      }
+    } else if (activeChannel?.recipient) {
+      const u = activeChannel.recipient;
+      pool.push({
+        id: u.id,
+        name: u.global_name || u.username,
+        username: u.username,
+        avatarUrl: u.avatar
+          ? `https://cdn.discordapp.com/avatars/${u.id}/${u.avatar}.png?size=64`
+          : null,
+        presence: presences[u.id],
+      });
+    }
+
+    const filtered = pool.filter(
+      (u) =>
+        u.name.toLowerCase().includes(q) ||
+        u.username.toLowerCase().includes(q)
+    );
+
+    return filtered.slice(0, 8);
+  }, [mentionQuery, guildMembers, activeChannel?.recipient, presences]);
+
+  const insertMention = (userId: string) => {
+    const val = inputText;
+    const cursorPos = textInputRef.current?.selectionStart ?? val.length;
+    const beforeCursor = val.slice(0, cursorPos);
+    const afterCursor = val.slice(cursorPos);
+
+    const replacedBefore = beforeCursor.replace(/@([a-zA-Z0-9_\.\-]*)$/, `<@${userId}> `);
+    const newVal = replacedBefore + afterCursor;
+
+    setInputText(newVal);
+    setMentionQuery(null);
+
+    setTimeout(() => {
+      if (textInputRef.current) {
+        textInputRef.current.focus();
+        const newCursorPos = replacedBefore.length;
+        textInputRef.current.setSelectionRange(newCursorPos, newCursorPos);
+      }
+    }, 10);
+  };
+
+  const handlePaste = (e: React.ClipboardEvent) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.type.startsWith("image/")) {
+        const file = item.getAsFile();
+        if (file) {
+          e.preventDefault();
+          const reader = new FileReader();
+          reader.onload = () => {
+            setSelectedFile({
+              name: file.name && file.name !== "image.png" ? file.name : `pasted_image_${Date.now()}.png`,
+              size: file.size,
+              dataUrl: reader.result as string,
+            });
+          };
+          reader.readAsDataURL(file);
+          break;
+        }
+      }
+    }
+  };
+
+  const baseMentionContext: MentionContext = React.useMemo(
+    () => ({
+      members: guildMembers,
+      roles: guildRoles,
+      channels,
+      currentUser,
+      onSelectUser,
+      onSelectChannel,
+    }),
+    [guildMembers, guildRoles, channels, currentUser, onSelectUser, onSelectChannel]
+  );
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {
@@ -160,6 +284,17 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const handleInputChange = (val: string) => {
     setInputText(val);
 
+    // Check for @ mention query
+    const cursorPos = textInputRef.current?.selectionStart ?? val.length;
+    const textBeforeCursor = val.slice(0, cursorPos);
+    const match = textBeforeCursor.match(/@([a-zA-Z0-9_\.\-]*)$/);
+    if (match) {
+      setMentionQuery(match[1]);
+      setSelectedMentionIndex(0);
+    } else {
+      setMentionQuery(null);
+    }
+
     // Trigger typing event to Discord Gateway (throttled to once per 6 seconds)
     if (val.trim() && activeChannel) {
       const now = Date.now();
@@ -188,6 +323,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     setInputText("");
     setSelectedFile(null);
     setReplyingTo(null);
+    setMentionQuery(null);
 
     await onSendMessage(
       text,
@@ -196,6 +332,34 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (mentionQuery !== null && mentionSuggestions.length > 0) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setSelectedMentionIndex((prev) => (prev + 1) % mentionSuggestions.length);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setSelectedMentionIndex(
+          (prev) => (prev - 1 + mentionSuggestions.length) % mentionSuggestions.length
+        );
+        return;
+      }
+      if (e.key === "Enter" || e.key === "Tab") {
+        e.preventDefault();
+        const selected = mentionSuggestions[selectedMentionIndex];
+        if (selected) {
+          insertMention(selected.id);
+        }
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setMentionQuery(null);
+        return;
+      }
+    }
+
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSend();
@@ -562,7 +726,15 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                       className="text-slate-200 break-words leading-snug select-text"
                       style={{ fontSize: `${settings.fontSize}px` }}
                     >
-                      {formatMarkdownText(msg.content)}
+                      {formatMarkdownText(msg.content, {
+                        ...baseMentionContext,
+                        mentions: msg.mentions,
+                      })}
+                      {msg.edited_timestamp && (
+                        <span className="text-[10px] text-white/30 italic ml-1 select-none">
+                          (edited)
+                        </span>
+                      )}
                     </div>
                   )}
 
@@ -573,6 +745,10 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                         <EmbedCard
                           key={eIdx}
                           embed={embed}
+                          mentionContext={{
+                            ...baseMentionContext,
+                            mentions: msg.mentions,
+                          }}
                           onOpenImage={(url) => setPreviewImage(url)}
                         />
                       ))}
@@ -816,8 +992,55 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           />
         )}
 
+        {/* @ Mention Autocomplete Popover */}
+        {mentionQuery !== null && mentionSuggestions.length > 0 && (
+          <div className="absolute bottom-full left-4 mb-2 z-30 w-72 bg-[#18191c] border border-white/10 rounded-2xl shadow-2xl overflow-hidden py-1.5 animate-fadeIn select-none backdrop-blur-xl">
+            <div className="px-3 py-1 text-[11px] font-bold uppercase tracking-wider text-white/40 border-b border-white/5 flex items-center justify-between">
+              <span>Members</span>
+              <span className="font-mono text-[10px] lowercase text-white/30">Tab / Enter to select</span>
+            </div>
+            <div className="max-h-56 overflow-y-auto py-1">
+              {mentionSuggestions.map((user, idx) => (
+                <div
+                  key={user.id}
+                  onClick={() => insertMention(user.id)}
+                  className={`flex items-center gap-2.5 px-3 py-1.5 cursor-pointer transition-colors ${
+                    idx === selectedMentionIndex
+                      ? "bg-[var(--accent-dim)] text-white border-l-2 border-[var(--accent)]"
+                      : "text-white/80 hover:bg-white/5"
+                  }`}
+                >
+                  <div className="relative w-7 h-7 rounded-full overflow-hidden bg-white/10 shrink-0">
+                    {user.avatarUrl ? (
+                      <img src={user.avatarUrl} alt="" className="w-full h-full object-cover" />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center font-bold text-xs text-white">
+                        {user.name[0]?.toUpperCase()}
+                      </div>
+                    )}
+                    {user.presence && (
+                      <div className="absolute -bottom-0.5 -right-0.5">
+                        <StatusBadge status={user.presence.status} size="sm" />
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs font-semibold text-white truncate">
+                      {user.name}
+                    </div>
+                    <div className="text-[10px] text-white/40 font-mono truncate">
+                      @{user.username}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         <form
           onSubmit={handleSend}
+          onPaste={handlePaste}
           className="flex items-center gap-2 p-2 bg-white/5 rounded-2xl border border-white/10 focus-within:border-[var(--accent)] transition-all shadow-inner"
         >
           <input

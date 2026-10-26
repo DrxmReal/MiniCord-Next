@@ -1,10 +1,11 @@
 import React, { useState } from "react";
-import { ExternalLink, Hash, Users, ShieldAlert } from "lucide-react";
-import { DiscordEmbed } from "../types";
+import { ExternalLink, Hash, Users, ShieldAlert, Copy, Check } from "lucide-react";
+import { DiscordEmbed, MentionContext } from "../types";
 
 interface EmbedCardProps {
   embed: DiscordEmbed;
   onOpenImage?: (url: string) => void;
+  mentionContext?: MentionContext;
 }
 
 export const SpoilerText: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -24,8 +25,47 @@ export const SpoilerText: React.FC<{ children: React.ReactNode }> = ({ children 
   );
 };
 
+export const CodeBlock: React.FC<{ lang?: string; code: string }> = ({ lang, code }) => {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(code);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <div className="my-2 rounded-xl overflow-hidden border border-white/10 bg-[#121316] shadow-md font-mono text-xs select-text">
+      <div className="flex items-center justify-between px-3 py-1.5 bg-black/40 border-b border-white/5 text-[11px] text-white/50 select-none">
+        <span className="uppercase font-semibold tracking-wider text-[var(--accent)] font-mono">
+          {lang || "code"}
+        </span>
+        <button
+          onClick={handleCopy}
+          className="flex items-center gap-1 hover:text-white transition-colors cursor-pointer text-white/60"
+        >
+          {copied ? (
+            <>
+              <Check className="w-3.5 h-3.5 text-emerald-400" />
+              <span className="text-emerald-400 font-sans">Copied!</span>
+            </>
+          ) : (
+            <>
+              <Copy className="w-3.5 h-3.5" />
+              <span className="font-sans">Copy</span>
+            </>
+          )}
+        </button>
+      </div>
+      <pre className="p-3 overflow-x-auto text-slate-200 leading-relaxed font-mono whitespace-pre">
+        <code>{code}</code>
+      </pre>
+    </div>
+  );
+};
+
 // Formats inline tokens (bold, emoji, mentions, links, spoilers)
-const formatInlineTokens = (text: string): React.ReactNode => {
+const formatInlineTokens = (text: string, context?: MentionContext): React.ReactNode => {
   if (!text) return null;
 
   const tokenRegex =
@@ -57,39 +97,91 @@ const formatInlineTokens = (text: string): React.ReactNode => {
     }
 
     // Channel mention <#id>
-    if (part.match(/^<#\d+>$/)) {
+    const chMatch = part.match(/^<#(\d+)>$/);
+    if (chMatch) {
+      const chId = chMatch[1];
+      const ch = context?.channels?.find((c) => c.id === chId);
+      const chName = ch ? ch.name : "channel";
       return (
         <span
           key={idx}
+          onClick={() => ch && context?.onSelectChannel?.(ch)}
           className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md bg-[var(--accent-dim)] text-[var(--accent)] font-semibold text-xs hover:bg-[var(--accent)] hover:text-black cursor-pointer transition-colors"
+          title={`#${chName}`}
         >
           <Hash className="w-3 h-3 inline" />
-          <span>channel</span>
+          <span>{chName}</span>
         </span>
       );
     }
 
     // Role mention <@&id>
-    if (part.match(/^<@&\d+>$/)) {
+    const roleMatch = part.match(/^<@&(\d+)>$/);
+    if (roleMatch) {
+      const roleId = roleMatch[1];
+      const role = context?.roles?.find((r) => r.id === roleId);
+      const roleName = role ? role.name : "role";
+      const roleColor =
+        role?.color && role.color !== 0
+          ? `#${role.color.toString(16).padStart(6, "0")}`
+          : undefined;
+
       return (
         <span
           key={idx}
-          className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md bg-blue-500/20 text-blue-300 font-semibold text-xs"
+          className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md font-semibold text-xs"
+          style={{
+            backgroundColor: roleColor ? `${roleColor}25` : "rgba(59, 130, 246, 0.2)",
+            color: roleColor || "#93c5fd",
+          }}
+          title={`@${roleName}`}
         >
           <Users className="w-3 h-3 inline" />
-          <span>@role</span>
+          <span>@{roleName}</span>
         </span>
       );
     }
 
     // User mention <@id> or <@!id>
-    if (part.match(/^<@!?\d+>$/)) {
+    const userMatch = part.match(/^<@!?(\d+)>$/);
+    if (userMatch) {
+      const userId = userMatch[1];
+      let foundUser = context?.mentions?.find((u) => u.id === userId);
+      if (!foundUser && context?.currentUser && context.currentUser.id === userId) {
+        foundUser = context.currentUser;
+      }
+      let memberNick: string | null = null;
+      if (context?.members) {
+        const mem = context.members.find((m) => m.user.id === userId);
+        if (mem) {
+          if (!foundUser) foundUser = mem.user;
+          if (mem.nick) memberNick = mem.nick;
+        }
+      }
+
+      const displayName =
+        memberNick ||
+        foundUser?.global_name ||
+        foundUser?.username ||
+        (context?.currentUser?.id === userId
+          ? context.currentUser.global_name || context.currentUser.username
+          : null) ||
+        `User`;
+
       return (
         <span
           key={idx}
-          className="inline-flex items-center px-1.5 py-0.5 rounded-md bg-[var(--accent-dim)] text-[var(--accent)] font-semibold text-xs"
+          onClick={() => {
+            if (foundUser && context?.onSelectUser) {
+              context.onSelectUser(foundUser);
+            }
+          }}
+          className={`inline-flex items-center px-1.5 py-0.5 rounded-md bg-[var(--accent-dim)] text-[var(--accent)] font-semibold text-xs hover:bg-[var(--accent)] hover:text-black transition-colors ${
+            foundUser && context?.onSelectUser ? "cursor-pointer" : ""
+          }`}
+          title={foundUser ? `@${foundUser.username}` : `@${userId}`}
         >
-          @user
+          @{displayName}
         </span>
       );
     }
@@ -110,7 +202,7 @@ const formatInlineTokens = (text: string): React.ReactNode => {
     // Spoiler ||text||
     if (part.startsWith("||") && part.endsWith("||") && part.length >= 4) {
       const inner = part.slice(2, -2);
-      return <SpoilerText key={idx}>{formatInlineTokens(inner)}</SpoilerText>;
+      return <SpoilerText key={idx}>{formatInlineTokens(inner, context)}</SpoilerText>;
     }
 
     // Markdown link [title](url)
@@ -146,8 +238,8 @@ const formatInlineTokens = (text: string): React.ReactNode => {
     // Bold italic ***text***
     if (part.startsWith("***") && part.endsWith("***")) {
       return (
-        <strong key={idx} className="italic font-bold">
-          {formatInlineTokens(part.slice(3, -3))}
+        <strong key={idx} className="font-bold italic">
+          {formatInlineTokens(part.slice(3, -3), context)}
         </strong>
       );
     }
@@ -155,8 +247,8 @@ const formatInlineTokens = (text: string): React.ReactNode => {
     // Bold **text**
     if (part.startsWith("**") && part.endsWith("**")) {
       return (
-        <strong key={idx} className="font-bold">
-          {formatInlineTokens(part.slice(2, -2))}
+        <strong key={idx} className="font-bold text-white">
+          {formatInlineTokens(part.slice(2, -2), context)}
         </strong>
       );
     }
@@ -164,8 +256,8 @@ const formatInlineTokens = (text: string): React.ReactNode => {
     // Italic *text*
     if (part.startsWith("*") && part.endsWith("*")) {
       return (
-        <em key={idx} className="italic">
-          {formatInlineTokens(part.slice(1, -1))}
+        <em key={idx} className="italic text-slate-200">
+          {formatInlineTokens(part.slice(1, -1), context)}
         </em>
       );
     }
@@ -174,7 +266,7 @@ const formatInlineTokens = (text: string): React.ReactNode => {
     if (part.startsWith("__") && part.endsWith("__")) {
       return (
         <u key={idx} className="underline">
-          {formatInlineTokens(part.slice(2, -2))}
+          {formatInlineTokens(part.slice(2, -2), context)}
         </u>
       );
     }
@@ -183,7 +275,7 @@ const formatInlineTokens = (text: string): React.ReactNode => {
     if (part.startsWith("~~") && part.endsWith("~~")) {
       return (
         <s key={idx} className="line-through text-white/50">
-          {formatInlineTokens(part.slice(2, -2))}
+          {formatInlineTokens(part.slice(2, -2), context)}
         </s>
       );
     }
@@ -221,71 +313,157 @@ const formatInlineTokens = (text: string): React.ReactNode => {
   });
 };
 
-export const formatMarkdownText = (text: string): React.ReactNode => {
+export const formatMarkdownText = (
+  text: string,
+  context?: MentionContext
+): React.ReactNode => {
   if (!text) return null;
 
-  // Split into lines to parse headings and bullet points
-  const lines = text.split("\n");
+  // 1. Parse multiline code blocks first
+  const blocks: Array<
+    | { type: "code"; lang: string; code: string }
+    | { type: "text"; lines: string[] }
+  > = [];
 
-  return lines.map((line, lineIdx) => {
-    const trimmed = line.trim();
+  const rawLines = text.split("\n");
+  let inCodeBlock = false;
+  let currentCodeLang = "";
+  let currentCodeLines: string[] = [];
+  let currentTextLines: string[] = [];
 
-    // 1. Heading 1 (# Title)
-    if (trimmed.startsWith("# ")) {
+  for (let i = 0; i < rawLines.length; i++) {
+    const line = rawLines[i];
+    const fenceMatch = line.match(/^```([a-zA-Z0-9_\-\+]*)\s*$/);
+
+    if (!inCodeBlock && fenceMatch) {
+      if (currentTextLines.length > 0) {
+        blocks.push({ type: "text", lines: currentTextLines });
+        currentTextLines = [];
+      }
+      inCodeBlock = true;
+      currentCodeLang = fenceMatch[1] || "";
+      currentCodeLines = [];
+    } else if (inCodeBlock && line.trim() === "```") {
+      inCodeBlock = false;
+      blocks.push({
+        type: "code",
+        lang: currentCodeLang,
+        code: currentCodeLines.join("\n"),
+      });
+      currentCodeLang = "";
+      currentCodeLines = [];
+    } else if (inCodeBlock) {
+      currentCodeLines.push(line);
+    } else {
+      currentTextLines.push(line);
+    }
+  }
+
+  // Flush remaining
+  if (inCodeBlock) {
+    blocks.push({
+      type: "code",
+      lang: currentCodeLang,
+      code: currentCodeLines.join("\n"),
+    });
+  } else if (currentTextLines.length > 0) {
+    blocks.push({ type: "text", lines: currentTextLines });
+  }
+
+  return blocks.map((block, bIdx) => {
+    if (block.type === "code") {
       return (
-        <div key={lineIdx} className="text-lg font-bold text-white mt-2 mb-1 border-b border-white/10 pb-0.5">
-          {formatInlineTokens(trimmed.slice(2))}
+        <CodeBlock
+          key={`cb-${bIdx}`}
+          lang={block.lang}
+          code={block.code}
+        />
+      );
+    }
+
+    return block.lines.map((line, lineIdx) => {
+      const trimmed = line.trim();
+
+      // Heading 1 (# Title)
+      if (trimmed.startsWith("# ")) {
+        return (
+          <div
+            key={`h1-${bIdx}-${lineIdx}`}
+            className="text-lg font-bold text-white mt-2 mb-1 border-b border-white/10 pb-0.5"
+          >
+            {formatInlineTokens(trimmed.slice(2), context)}
+          </div>
+        );
+      }
+
+      // Heading 2 (## Title)
+      if (trimmed.startsWith("## ")) {
+        return (
+          <div
+            key={`h2-${bIdx}-${lineIdx}`}
+            className="text-base font-bold text-white mt-1.5 mb-1"
+          >
+            {formatInlineTokens(trimmed.slice(3), context)}
+          </div>
+        );
+      }
+
+      // Heading 3 (### Title)
+      if (trimmed.startsWith("### ")) {
+        return (
+          <div
+            key={`h3-${bIdx}-${lineIdx}`}
+            className="text-xs font-bold text-white/90 mt-1 mb-0.5 uppercase tracking-wide"
+          >
+            {formatInlineTokens(trimmed.slice(4), context)}
+          </div>
+        );
+      }
+
+      // Bullet lists (- item or * item)
+      if (trimmed.startsWith("- ") || trimmed.startsWith("* ")) {
+        return (
+          <div
+            key={`li-${bIdx}-${lineIdx}`}
+            className="flex items-start gap-2 pl-2.5 py-0.5"
+          >
+            <span className="text-[var(--accent)] font-bold text-xs select-none">
+              •
+            </span>
+            <span className="flex-1 text-slate-200">
+              {formatInlineTokens(trimmed.slice(2), context)}
+            </span>
+          </div>
+        );
+      }
+
+      // Blockquote (> text)
+      if (trimmed.startsWith("> ")) {
+        return (
+          <blockquote
+            key={`bq-${bIdx}-${lineIdx}`}
+            className="border-l-4 border-white/20 pl-2.5 my-1 text-slate-300 italic"
+          >
+            {formatInlineTokens(trimmed.slice(2), context)}
+          </blockquote>
+        );
+      }
+
+      // Regular line
+      return (
+        <div key={`l-${bIdx}-${lineIdx}`} className="min-h-[1.25rem]">
+          {formatInlineTokens(line, context)}
         </div>
       );
-    }
-
-    // 2. Heading 2 (## Title)
-    if (trimmed.startsWith("## ")) {
-      return (
-        <div key={lineIdx} className="text-base font-bold text-white mt-1.5 mb-1">
-          {formatInlineTokens(trimmed.slice(3))}
-        </div>
-      );
-    }
-
-    // 3. Heading 3 (### Title)
-    if (trimmed.startsWith("### ")) {
-      return (
-        <div key={lineIdx} className="text-xs font-bold text-white/90 mt-1 mb-0.5 uppercase tracking-wide">
-          {formatInlineTokens(trimmed.slice(4))}
-        </div>
-      );
-    }
-
-    // 4. Bullet lists (- item or * item)
-    if (trimmed.startsWith("- ") || trimmed.startsWith("* ")) {
-      return (
-        <div key={lineIdx} className="flex items-start gap-2 pl-2.5 py-0.5">
-          <span className="text-[var(--accent)] font-bold text-xs select-none">•</span>
-          <span className="flex-1 text-slate-200">{formatInlineTokens(trimmed.slice(2))}</span>
-        </div>
-      );
-    }
-
-    // 5. Blockquote (> text)
-    if (trimmed.startsWith("> ")) {
-      return (
-        <blockquote key={lineIdx} className="border-l-4 border-white/20 pl-2.5 my-1 text-slate-300 italic">
-          {formatInlineTokens(trimmed.slice(2))}
-        </blockquote>
-      );
-    }
-
-    // 6. Regular line
-    return (
-      <div key={lineIdx} className="min-h-[1.25rem]">
-        {formatInlineTokens(line)}
-      </div>
-    );
+    });
   });
 };
 
-export const EmbedCard: React.FC<EmbedCardProps> = ({ embed, onOpenImage }) => {
+export const EmbedCard: React.FC<EmbedCardProps> = ({
+  embed,
+  onOpenImage,
+  mentionContext,
+}) => {
   const embedColor = embed.color
     ? `#${embed.color.toString(16).padStart(6, "0")}`
     : "var(--accent)";
@@ -346,7 +524,7 @@ export const EmbedCard: React.FC<EmbedCardProps> = ({ embed, onOpenImage }) => {
           {/* Description */}
           {embed.description && (
             <div className="text-xs text-slate-300 leading-snug break-words">
-              {formatMarkdownText(embed.description)}
+              {formatMarkdownText(embed.description, mentionContext)}
             </div>
           )}
         </div>
@@ -375,7 +553,7 @@ export const EmbedCard: React.FC<EmbedCardProps> = ({ embed, onOpenImage }) => {
                 {field.name}
               </div>
               <div className="text-xs text-slate-300 break-words leading-snug">
-                {formatMarkdownText(field.value)}
+                {formatMarkdownText(field.value, mentionContext)}
               </div>
             </div>
           ))}

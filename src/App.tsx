@@ -72,6 +72,7 @@ export default function App() {
   const [selectedUserForProfile, setSelectedUserForProfile] = useState<DiscordUser | null>(null);
   const [selectedMemberForProfile, setSelectedMemberForProfile] = useState<DiscordMember | null>(null);
   const [guildRoles, setGuildRoles] = useState<DiscordRole[]>([]);
+  const [guildMembers, setGuildMembers] = useState<DiscordMember[]>([]);
 
   // Real-time typing indicators
   const [typingMap, setTypingMap] = useState<
@@ -463,14 +464,19 @@ export default function App() {
 
     if (guild && isTauri) {
       try {
-        const [guildChannels, roles] = await Promise.all([
+        const [guildChannels, roles, members] = await Promise.all([
           invoke<DiscordChannel[]>("get_channels", { guildId: guild.id }),
           invoke<DiscordRole[]>("get_guild_roles", { guildId: guild.id }).catch(
             () => []
           ),
+          invoke<DiscordMember[]>("get_guild_members", {
+            guildId: guild.id,
+            limit: 1000,
+          }).catch(() => []),
         ]);
         setChannels(guildChannels);
         setGuildRoles(roles);
+        setGuildMembers(members);
 
         // Find the first text/announcement channel (type 0 or 5) by lowest position
         const textChannels = guildChannels
@@ -485,6 +491,7 @@ export default function App() {
       }
     } else if (!guild && isTauri) {
       setGuildRoles([]);
+      setGuildMembers([]);
       await loadDMs();
     }
   };
@@ -772,6 +779,11 @@ export default function App() {
             onToggleMemberList={() => setIsMemberListOpen(!isMemberListOpen)}
             typingUsers={activeTypingUsernames}
             onToggleReaction={handleToggleReaction}
+            channels={channels}
+            guildRoles={guildRoles}
+            guildMembers={guildMembers}
+            currentUser={currentUser}
+            onSelectChannel={handleSelectChannel}
           />
         )}
 
@@ -780,6 +792,7 @@ export default function App() {
           <MemberList
             activeGuild={activeGuild}
             presences={presences}
+            initialMembers={guildMembers}
             onSelectUser={(user, member) => {
               setSelectedUserForProfile(user);
               setSelectedMemberForProfile(member || null);

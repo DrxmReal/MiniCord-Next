@@ -15,6 +15,7 @@ interface MemberListProps {
   presences: Record<string, UserPresence>;
   onSelectUser: (user: DiscordUser, member?: DiscordMember) => void;
   onClose?: () => void;
+  initialMembers?: DiscordMember[];
 }
 
 interface MemberGroup {
@@ -29,8 +30,15 @@ export const MemberList: React.FC<MemberListProps> = ({
   presences,
   onSelectUser,
   onClose,
+  initialMembers = [],
 }) => {
-  const [members, setMembers] = useState<DiscordMember[]>([]);
+  const [members, setMembers] = useState<DiscordMember[]>(initialMembers);
+
+  useEffect(() => {
+    if (initialMembers.length > 0) {
+      setMembers(initialMembers);
+    }
+  }, [initialMembers]);
   const [roles, setRoles] = useState<DiscordRole[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [isLoading, setIsLoading] = useState(false);
