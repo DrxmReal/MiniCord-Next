@@ -186,7 +186,7 @@ export const ChannelSidebar: React.FC<ChannelSidebarProps> = ({
   // Render individual channel item
   const renderChannelItem = (channel: DiscordChannel) => {
     const isActive = activeChannelId === channel.id;
-    const isVoice = channel.type === 2;
+    const isVoice = channel.type === 2 || channel.type === 13;
     const isAnnouncement = channel.type === 5;
     const isForum = channel.type === 15;
     const isConnectedToThisVoice = connectedVoice?.channelId === channel.id;
@@ -201,7 +201,7 @@ export const ChannelSidebar: React.FC<ChannelSidebarProps> = ({
         <button
           onClick={() => {
             onSelectChannel(channel);
-            if (isVoice && onJoinVoice) {
+            if (isVoice && onJoinVoice && !isConnectedToThisVoice) {
               onJoinVoice(channel);
             }
           }}

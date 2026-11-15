@@ -45,7 +45,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({
   return (
     <header
       data-tauri-drag-region
-      className="h-11 w-full px-3 flex items-center justify-between select-none z-50 shrink-0 border-b border-white/5 bg-[#090a0f]/90"
+      className="h-11 w-full px-3 flex items-center justify-between select-none z-50 shrink-0 border-b border-white/5 bg-[#090a0f]/90 relative"
     >
       {/* Left Capsule: App Identity & Status */}
       <div
@@ -62,10 +62,10 @@ export const TitleBar: React.FC<TitleBarProps> = ({
         </span>
       </div>
 
-      {/* Center Capsule: Active Context (Waybar style) */}
+      {/* Center Capsule: Active Context (Waybar style) - Centered */}
       <div
         data-tauri-drag-region
-        className="flex items-center gap-2 capsule-pill px-4 py-1 text-xs text-slate-300 max-w-[450px] truncate"
+        className="absolute left-1/2 -translate-x-1/2 flex items-center gap-2 capsule-pill px-4 py-1 text-xs text-slate-300 max-w-[450px] truncate"
       >
         {activeGuildName && (
           <span className="font-medium text-white/80">{activeGuildName}</span>

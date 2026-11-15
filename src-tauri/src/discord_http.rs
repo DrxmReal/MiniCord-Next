@@ -419,6 +419,7 @@ impl DiscordState {
         }
     }
 
+    #[allow(dead_code)]
     pub async fn patch_voice_state(
         &self,
         guild_id: &str,

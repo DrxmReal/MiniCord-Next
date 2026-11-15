@@ -218,7 +218,8 @@ pub fn spawn_gateway_session(app: AppHandle, token: String, state: Arc<GatewaySt
                                                 "guild_id": guild_id,
                                                 "channel_id": channel_id,
                                                 "self_mute": self_mute,
-                                                "self_deaf": self_deaf
+                                                "self_deaf": self_deaf,
+                                                "self_video": false
                                             }
                                         });
                                         println!("[Gateway] Transmitting Opcode 4 (VoiceStateUpdate): {}", msg);

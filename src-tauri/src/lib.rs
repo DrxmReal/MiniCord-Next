@@ -268,7 +268,6 @@ async fn set_voice_state(
     self_mute: Option<bool>,
     self_deaf: Option<bool>,
     gw_state: State<'_, Arc<GatewayState>>,
-    discord_state: State<'_, DiscordState>,
 ) -> Result<bool, String> {
     let m = self_mute.unwrap_or(false);
     let d = self_deaf.unwrap_or(false);
@@ -281,10 +280,6 @@ async fn set_voice_state(
             self_mute: m,
             self_deaf: d,
         }).await;
-    }
-
-    if let Some(gid) = guild_id.as_deref() {
-        let _ = discord_state.patch_voice_state(gid, channel_id.as_deref(), m, d).await;
     }
 
     Ok(true)

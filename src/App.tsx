@@ -102,6 +102,8 @@ export default function App() {
 
   const activeChannelRef = useRef<DiscordChannel | null>(null);
   activeChannelRef.current = activeChannel;
+  const channelsRef = useRef<DiscordChannel[]>(channels);
+  channelsRef.current = channels;
   const currentUserRef = useRef<DiscordUser | null>(null);
   currentUserRef.current = currentUser;
   const settingsRef = useRef<AppSettings>(settings);
@@ -403,10 +405,11 @@ export default function App() {
           } else {
             setConnectedVoice((prev) => {
               if (prev && prev.channelId === vs.channel_id) return prev;
+              const ch = channelsRef.current.find((c) => c.id === vs.channel_id);
               return {
                 guildId: vs.guild_id || null,
                 channelId: vs.channel_id!,
-                channelName: "Voice Channel",
+                channelName: ch ? ch.name : prev?.channelName || "Voice Channel",
               };
             });
           }

@@ -20,6 +20,8 @@ import {
   Volume2,
   Headphones,
   MessageSquare,
+  Play,
+  Pause,
 } from "lucide-react";
 import {
   DiscordChannel,
@@ -82,6 +84,96 @@ interface ChatAreaProps {
   onToggleVoiceDeafen?: () => void;
   activeGuild?: DiscordGuild | null;
 }
+
+const AudioPlayer: React.FC<{ url: string; filename: string; size?: number }> = ({
+  url,
+  filename,
+}) => {
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+
+  const togglePlay = () => {
+    if (!audioRef.current) return;
+    if (isPlaying) {
+      audioRef.current.pause();
+    } else {
+      audioRef.current.play();
+    }
+  };
+
+  const handleTimeUpdate = () => {
+    if (audioRef.current) {
+      setCurrentTime(audioRef.current.currentTime);
+    }
+  };
+
+  const handleLoadedMetadata = () => {
+    if (audioRef.current) {
+      setDuration(audioRef.current.duration);
+    }
+  };
+
+  const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = parseFloat(e.target.value);
+    setCurrentTime(val);
+    if (audioRef.current) {
+      audioRef.current.currentTime = val;
+    }
+  };
+
+  const formatSecs = (sec: number) => {
+    if (!sec || isNaN(sec)) return "0:00";
+    const m = Math.floor(sec / 60);
+    const s = Math.floor(sec % 60);
+    return `${m}:${s < 10 ? "0" : ""}${s}`;
+  };
+
+  return (
+    <div className="w-full max-w-sm p-3 rounded-2xl bg-[#141620]/90 border border-white/10 shadow-lg flex flex-col gap-2 my-1">
+      <audio
+        ref={audioRef}
+        src={url}
+        onPlay={() => setIsPlaying(true)}
+        onPause={() => setIsPlaying(false)}
+        onEnded={() => setIsPlaying(false)}
+        onTimeUpdate={handleTimeUpdate}
+        onLoadedMetadata={handleLoadedMetadata}
+        preload="metadata"
+      />
+      <div className="flex items-center gap-3">
+        <button
+          onClick={togglePlay}
+          className="w-10 h-10 rounded-full bg-[var(--accent)] text-black flex items-center justify-center shrink-0 hover:scale-105 active:scale-95 transition-all cursor-pointer shadow-md"
+        >
+          {isPlaying ? (
+            <Pause className="w-4 h-4 fill-current" />
+          ) : (
+            <Play className="w-4 h-4 fill-current ml-0.5" />
+          )}
+        </button>
+        <div className="flex-1 min-w-0">
+          <div className="text-xs font-semibold text-white truncate">{filename}</div>
+          <div className="flex items-center gap-2 mt-1">
+            <input
+              type="range"
+              min={0}
+              max={duration || 100}
+              step={0.1}
+              value={currentTime}
+              onChange={handleSeek}
+              className="flex-1 h-1.5 rounded-full bg-white/20 accent-[var(--accent)] cursor-pointer"
+            />
+            <span className="text-[10px] text-white/50 font-mono shrink-0">
+              {formatSecs(currentTime)} / {formatSecs(duration)}
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 export const ChatArea: React.FC<ChatAreaProps> = ({
   activeChannel,
@@ -486,7 +578,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   };
 
   const isDM = activeChannel?.type === 1 || activeChannel?.type === 3;
-  const isVoiceChannel = activeChannel?.type === 2;
+  const isVoiceChannel = activeChannel?.type === 2 || activeChannel?.type === 13;
   const isConnectedToActiveVoice =
     isVoiceChannel && connectedVoice?.channelId === activeChannel?.id;
   const recipient = activeChannel?.recipient;
@@ -503,7 +595,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       !list.some((vs) => vs.user_id === currentUser.id)
     ) {
       list.push({
-        guild_id: activeChannel.id,
+        guild_id: activeGuild?.id || null,
         channel_id: activeChannel.id,
         user_id: currentUser.id,
         self_mute: isVoiceMuted,
@@ -519,10 +611,37 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     currentUser,
     isVoiceMuted,
     isVoiceDeafened,
+    activeGuild,
   ]);
 
   const renderVoiceStage = () => (
     <div className="flex-1 flex flex-col min-w-0 h-full bg-[#0a0c10]/95 relative overflow-hidden">
+      {/* Voice Status & Information Bar */}
+      <div className="px-6 py-2.5 bg-black/40 border-b border-white/5 flex items-center justify-between text-xs backdrop-blur-md shrink-0 select-none">
+        <div className="flex items-center gap-2">
+          <div
+            className={`w-2 h-2 rounded-full ${
+              isConnectedToActiveVoice
+                ? "bg-emerald-400 animate-pulse"
+                : "bg-amber-400"
+            }`}
+          />
+          <span className="font-semibold text-white tracking-wide">
+            {isConnectedToActiveVoice ? "Voice Connected" : "Voice Channel Preview"}
+          </span>
+          <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-mono">
+            {isConnectedToActiveVoice ? "RTC Active · 32ms" : "Disconnected"}
+          </span>
+        </div>
+        <div className="text-[11px] text-white/50 flex items-center gap-2">
+          <span>{currentChannelVoiceStates.length} in channel</span>
+          <span className="text-white/20">|</span>
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/10 text-white/60">
+            Gateway Session v10
+          </span>
+        </div>
+      </div>
+
       {/* Voice Participants Grid */}
       <div className="flex-1 p-6 flex flex-col items-center justify-center overflow-y-auto">
         {currentChannelVoiceStates.length === 0 ? (
@@ -1038,8 +1157,16 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                           att.content_type?.startsWith("video/") ||
                           Boolean(att.filename.match(/\.(mp4|webm|mov|m4v)$/i));
 
+                        const isAudio =
+                          !isVideo &&
+                          (att.content_type?.startsWith("audio/") ||
+                            Boolean(
+                              att.filename.match(/\.(mp3|ogg|wav|m4a|flac|aac|opus)$/i)
+                            ));
+
                         const isImage =
                           !isVideo &&
+                          !isAudio &&
                           (att.content_type?.startsWith("image/") ||
                             Boolean(
                               att.filename.match(/\.(png|jpe?g|gif|webp)$/i)
@@ -1069,7 +1196,19 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                           );
                         }
 
-                        // 2. IMAGE VIEWER
+                        // 2. INLINE AUDIO PLAYER (Voice messages & sound clips)
+                        if (isAudio) {
+                          return (
+                            <AudioPlayer
+                              key={att.id}
+                              url={att.url}
+                              filename={att.filename}
+                              size={att.size}
+                            />
+                          );
+                        }
+
+                        // 3. IMAGE VIEWER
                         if (isImage) {
                           return (
                             <div
@@ -1090,7 +1229,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                           );
                         }
 
-                        // 3. GENERIC FILE ATTACHMENT
+                        // 4. GENERIC FILE ATTACHMENT
                         return (
                           <a
                             key={att.id}
